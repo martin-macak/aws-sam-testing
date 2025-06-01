@@ -752,6 +752,223 @@ def test_remove_dependencies_getatt_and_fn_getatt():
     assert "MyFunction2" in processor.processed_template["Resources"]
 
 
+def test_remove_dependencies_direct_call():
+    """Test calling remove_dependencies directly to remove circular references."""
+    yaml_content = """
+    Resources:
+      ResourceA:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: !Ref ResourceB
+      ResourceB:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: !Ref ResourceA
+      ResourceC:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: my-bucket
+    """
+    template = load_yaml(yaml_content)
+
+    processor = CloudFormationTemplateProcessor(template)
+    # Call remove_dependencies directly - it should remove circular references
+    processor.remove_dependencies("any_resource")
+
+    # ResourceA and ResourceB form a circular reference island and should be removed
+    assert "ResourceA" not in processor.processed_template["Resources"]
+    assert "ResourceB" not in processor.processed_template["Resources"]
+    # ResourceC is not part of any circular reference and should remain
+    assert "ResourceC" in processor.processed_template["Resources"]
+
+
+def test_remove_dependencies_complex_island():
+    """Test removing complex circular reference islands."""
+    yaml_content = """
+    Resources:
+      ResourceA:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: !Ref ResourceB
+      ResourceB:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: !Ref ResourceC
+      ResourceC:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: !Ref ResourceA
+      ResourceD:
+        Type: AWS::Lambda::Function
+        Properties:
+          Environment:
+            Variables:
+              BUCKET: !Ref ResourceE
+      ResourceE:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: !Ref ResourceD
+    """
+    template = load_yaml(yaml_content)
+
+    processor = CloudFormationTemplateProcessor(template)
+    processor.remove_dependencies("dummy")
+
+    # All resources form circular reference islands and should be removed
+    assert "ResourceA" not in processor.processed_template["Resources"]
+    assert "ResourceB" not in processor.processed_template["Resources"]
+    assert "ResourceC" not in processor.processed_template["Resources"]
+    assert "ResourceD" not in processor.processed_template["Resources"]
+    assert "ResourceE" not in processor.processed_template["Resources"]
+
+
+def test_remove_dependencies_island_with_external_reference():
+    """Test that circular reference islands referenced from outside are not removed."""
+    yaml_content = """
+    Resources:
+      ResourceA:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: !Ref ResourceB
+      ResourceB:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: !Ref ResourceA
+      ResourceC:
+        Type: AWS::Lambda::Function
+        Properties:
+          Environment:
+            Variables:
+              BUCKET: !Ref ResourceA
+    """
+    template = load_yaml(yaml_content)
+
+    processor = CloudFormationTemplateProcessor(template)
+    processor.remove_dependencies("dummy")
+
+    # ResourceA and ResourceB form a circular reference but ResourceA is referenced by ResourceC
+    # So they should NOT be removed
+    assert "ResourceA" in processor.processed_template["Resources"]
+    assert "ResourceB" in processor.processed_template["Resources"]
+    assert "ResourceC" in processor.processed_template["Resources"]
+
+
+def test_remove_dependencies_mixed_scenarios():
+    """Test mixed scenarios with both removable and non-removable islands."""
+    yaml_content = """
+    Resources:
+      # Circular reference island that should be removed
+      IslandA1:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: !Ref IslandA2
+      IslandA2:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: !Ref IslandA1
+      
+      # Circular reference island referenced from Outputs - should NOT be removed
+      IslandB1:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: !Ref IslandB2
+      IslandB2:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: !Ref IslandB1
+      
+      # Regular resource
+      RegularResource:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: regular-bucket
+          
+    Outputs:
+      BucketRef:
+        Value: !Ref IslandB1
+    """
+    template = load_yaml(yaml_content)
+
+    processor = CloudFormationTemplateProcessor(template)
+    processor.remove_dependencies("dummy")
+
+    # IslandA1 and IslandA2 should be removed
+    assert "IslandA1" not in processor.processed_template["Resources"]
+    assert "IslandA2" not in processor.processed_template["Resources"]
+
+    # IslandB1 and IslandB2 should NOT be removed (referenced in Outputs)
+    assert "IslandB1" in processor.processed_template["Resources"]
+    assert "IslandB2" in processor.processed_template["Resources"]
+
+    # RegularResource should remain
+    assert "RegularResource" in processor.processed_template["Resources"]
+
+
+def test_remove_dependencies_with_fn_functions():
+    """Test circular references using Fn:: style functions."""
+    yaml_content = """
+    Resources:
+      ResourceA:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName:
+            Ref: ResourceB
+      ResourceB:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName:
+            Fn::Sub: "${ResourceA}-suffix"
+    """
+    template = load_yaml(yaml_content)
+
+    processor = CloudFormationTemplateProcessor(template)
+    processor.remove_dependencies("dummy")
+
+    # ResourceA and ResourceB form a circular reference and should be removed
+    assert "ResourceA" not in processor.processed_template["Resources"]
+    assert "ResourceB" not in processor.processed_template["Resources"]
+
+
+def test_remove_dependencies_self_reference():
+    """Test resources that reference themselves."""
+    yaml_content = """
+    Resources:
+      SelfReference:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: !Ref SelfReference
+      NormalResource:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: normal-bucket
+    """
+    template = load_yaml(yaml_content)
+
+    processor = CloudFormationTemplateProcessor(template)
+    processor.remove_dependencies("dummy")
+
+    # SelfReference forms a single-node cycle and should be removed
+    assert "SelfReference" not in processor.processed_template["Resources"]
+    # NormalResource should remain
+    assert "NormalResource" in processor.processed_template["Resources"]
+
+
+def test_remove_dependencies_empty_template():
+    """Test remove_dependencies on empty template."""
+    template = {}
+    processor = CloudFormationTemplateProcessor(template)
+    processor.remove_dependencies("dummy")
+    assert processor.processed_template == {}
+
+
+def test_remove_dependencies_no_resources():
+    """Test remove_dependencies on template without Resources section."""
+    template = {"Outputs": {"Test": {"Value": "test"}}}
+    processor = CloudFormationTemplateProcessor(template)
+    processor.remove_dependencies("dummy")
+    assert processor.processed_template == {"Outputs": {"Test": {"Value": "test"}}}
+
+
 def test_remove_dependencies_sub_and_fn_sub():
     """Test removing dependencies with both !Sub and Fn::Sub."""
     yaml_content = """

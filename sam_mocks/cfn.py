@@ -1,7 +1,6 @@
-from pathlib import Path
 import yaml
 import copy
-from typing import Any, Dict, Optional, List, Union
+from typing import Any, Dict, List
 
 
 def get_node_type_name(node: yaml.Node) -> str:
@@ -349,7 +348,15 @@ def load_yaml_file(file_path: str) -> Dict[str, Any]:
 
 
 class CloudFormationTemplateProcessor:
+    """Processor for CloudFormation templates that handles resource manipulation and dependency management."""
+
     def __init__(self, template: dict[str, Any]):
+        """
+        Initialize the CloudFormation template processor.
+
+        Args:
+            template: The CloudFormation template dictionary to process
+        """
         self.template = template
         self.processed_template = copy.deepcopy(template)
 
@@ -379,7 +386,7 @@ class CloudFormationTemplateProcessor:
         # Build the graphs
         for res_name, resource in self.processed_template["Resources"].items():
             for other_res in all_resources:
-                if other_res != res_name and self._find_references_in_value(resource, other_res):
+                if self._find_references_in_value(resource, other_res):
                     references[res_name].add(other_res)
                     referenced_by[other_res].add(res_name)
 
@@ -392,7 +399,6 @@ class CloudFormationTemplateProcessor:
         # Find circular reference groups (true islands)
         # These are strongly connected components where no member is referenced from outside
         islands = []
-        visited = set()
 
         # Use Tarjan's algorithm to find strongly connected components
         index_counter = [0]
@@ -427,9 +433,17 @@ class CloudFormationTemplateProcessor:
                         break
 
                 # Check if this SCC is a true island
-                if len(scc) > 1:  # Only multi-node SCCs can be circular references
-                    is_island = True
+                is_island = True
 
+                # Single-node SCCs are islands only if they self-reference
+                if len(scc) == 1:
+                    node = next(iter(scc))
+                    # Check if node references itself
+                    if node in references.get(node, set()):
+                        # It's a self-referencing node
+                        if node not in externally_referenced:
+                            islands.append(scc)
+                elif len(scc) > 1:  # Multi-node SCCs can be circular references
                     # Check if any member is referenced from outside the SCC
                     for node in scc:
                         if node in externally_referenced:
@@ -490,7 +504,17 @@ class CloudFormationTemplateProcessor:
         resource_name: str,
         auto_remove_dependencies: bool = True,
     ) -> "CloudFormationTemplateProcessor":
-        """Remove a resource from the template."""
+        """
+        Remove a resource from the template.
+
+        Args:
+            resource_name: The name of the resource to remove
+            auto_remove_dependencies: If True, automatically remove unreferenced dependencies
+                and circular reference islands
+
+        Returns:
+            Self for method chaining
+        """
         if "Resources" not in self.processed_template or resource_name not in self.processed_template["Resources"]:
             return self
 
@@ -652,27 +676,23 @@ class CloudFormationTemplateProcessor:
         resource_name: str,
     ) -> "CloudFormationTemplateProcessor":
         """
-        Remove dependencies of a resource from the template.
+        Remove circular reference islands from the template.
 
-        This method recursively removes all dependencies of the resource.
-        This method checks the references in the template and removes them if they are not used in any other resource.
-        Notes: CFN resource can be referenced in multiple places and by multiple ways.
-            For example !Ref or Ref can reference it.
-            Also !GetAtt can reference it (also Fn::GetAtt)
-            Also !Sub can reference it (also Fn::Sub)
-            Also !FindInMap can reference it (also Fn::FindInMap)
-            Also !Base64 can reference it (also Fn::Base64)
-            Also !Cidr can reference it (also Fn::Cidr)
-            Also !ImportValue can reference it (also Fn::ImportValue)
-            Also !GetAZs can reference it (also Fn::GetAZs)
-            Don't forget to implement recursive removal of dependencies.
-            Don't forget that resources can be referenced also in Outputs.
+        This method identifies and removes groups of resources that only reference
+        each other and are not referenced from outside their group (circular reference islands).
+        This includes self-referencing resources.
+
+        Args:
+            resource_name: Not used - kept for backward compatibility
+
+        Returns:
+            Self for method chaining
         """
-        # After removing a resource, check for circular references (islands)
+
         islands = self._find_resource_islands()
         for island in islands:
-            for res_name in island:
-                if res_name in self.processed_template["Resources"]:
-                    self.processed_template["Resources"].pop(res_name)
+            for resource_name in island:
+                if resource_name in self.processed_template["Resources"]:
+                    self.processed_template["Resources"].pop(resource_name)
 
         return self
