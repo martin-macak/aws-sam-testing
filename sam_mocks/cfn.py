@@ -1,5 +1,6 @@
 from pathlib import Path
 import yaml
+import copy
 from typing import Any, Dict, Optional, List, Union
 
 
@@ -350,7 +351,139 @@ def load_yaml_file(file_path: str) -> Dict[str, Any]:
 class CloudFormationTemplateProcessor:
     def __init__(self, template: dict[str, Any]):
         self.template = template
-        self.processed_template = template.copy()
+        self.processed_template = copy.deepcopy(template)
+
+    def _find_resource_islands(self) -> List[set[str]]:
+        """
+        Find groups of resources that only reference each other (islands).
+        These are resources that form circular references or closed groups.
+
+        Returns:
+            List of sets, where each set contains resource names that form an island
+        """
+        if "Resources" not in self.processed_template:
+            return []
+
+        all_resources = set(self.processed_template["Resources"].keys())
+
+        # Build a reference graph
+        # references[A] = {B, C} means A references B and C
+        # referenced_by[A] = {B, C} means A is referenced by B and C
+        references = {}
+        referenced_by = {}
+
+        for res_name in all_resources:
+            references[res_name] = set()
+            referenced_by[res_name] = set()
+
+        # Build the graphs
+        for res_name, resource in self.processed_template["Resources"].items():
+            for other_res in all_resources:
+                if other_res != res_name and self._find_references_in_value(resource, other_res):
+                    references[res_name].add(other_res)
+                    referenced_by[other_res].add(res_name)
+
+        # Find resources referenced from outside Resources section
+        externally_referenced = set()
+        for res_name in all_resources:
+            if self._is_resource_referenced_outside_resources(res_name):
+                externally_referenced.add(res_name)
+
+        # Find circular reference groups (true islands)
+        # These are strongly connected components where no member is referenced from outside
+        islands = []
+        visited = set()
+
+        # Use Tarjan's algorithm to find strongly connected components
+        index_counter = [0]
+        stack = []
+        indices = {}
+        lowlinks = {}
+        on_stack = {}
+
+        def strongconnect(v):
+            indices[v] = index_counter[0]
+            lowlinks[v] = index_counter[0]
+            index_counter[0] += 1
+            stack.append(v)
+            on_stack[v] = True
+
+            # Consider successors of v
+            for w in references.get(v, set()):
+                if w not in indices:
+                    strongconnect(w)
+                    lowlinks[v] = min(lowlinks[v], lowlinks[w])
+                elif on_stack.get(w, False):
+                    lowlinks[v] = min(lowlinks[v], indices[w])
+
+            # If v is a root node, pop the stack and print an SCC
+            if lowlinks[v] == indices[v]:
+                scc = set()
+                while True:
+                    w = stack.pop()
+                    on_stack[w] = False
+                    scc.add(w)
+                    if w == v:
+                        break
+
+                # Check if this SCC is a true island
+                if len(scc) > 1:  # Only multi-node SCCs can be circular references
+                    is_island = True
+
+                    # Check if any member is referenced from outside the SCC
+                    for node in scc:
+                        if node in externally_referenced:
+                            is_island = False
+                            break
+
+                        # Check references from other resources
+                        for ref_by in referenced_by.get(node, set()):
+                            if ref_by not in scc:
+                                is_island = False
+                                break
+
+                        if not is_island:
+                            break
+
+                    if is_island:
+                        islands.append(scc)
+
+        # Find all SCCs
+        for res_name in all_resources:
+            if res_name not in indices:
+                strongconnect(res_name)
+
+        return islands
+
+    def _is_resource_referenced_outside_resources(self, resource_name: str) -> bool:
+        """
+        Check if a resource is referenced outside the Resources section.
+
+        Args:
+            resource_name: The resource name to check
+
+        Returns:
+            True if the resource is referenced in Outputs, Conditions, etc.
+        """
+        # Check in Outputs section
+        if "Outputs" in self.processed_template:
+            for output in self.processed_template["Outputs"].values():
+                if self._find_references_in_value(output, resource_name):
+                    return True
+
+        # Check in Conditions section
+        if "Conditions" in self.processed_template:
+            for condition in self.processed_template["Conditions"].values():
+                if self._find_references_in_value(condition, resource_name):
+                    return True
+
+        # Check in Mappings section (unlikely but possible)
+        if "Mappings" in self.processed_template:
+            for mapping in self.processed_template["Mappings"].values():
+                if self._find_references_in_value(mapping, resource_name):
+                    return True
+
+        return False
 
     def remove_resource(
         self,
@@ -358,14 +491,188 @@ class CloudFormationTemplateProcessor:
         auto_remove_dependencies: bool = True,
     ) -> "CloudFormationTemplateProcessor":
         """Remove a resource from the template."""
+        if "Resources" not in self.processed_template or resource_name not in self.processed_template["Resources"]:
+            return self
+
+        # If auto_remove_dependencies is True, we need to track what the removed resource depends on
+        # before removing it
+        dependencies_to_check = set()
+        if auto_remove_dependencies:
+            # Find all resources that the resource being removed references
+            resource = self.processed_template["Resources"][resource_name]
+            for other_res in self.processed_template["Resources"]:
+                if other_res != resource_name and self._find_references_in_value(resource, other_res):
+                    dependencies_to_check.add(other_res)
+
+        # Remove the resource
         self.processed_template["Resources"].pop(resource_name)
+
+        # Now check if any of the dependencies can be removed
+        if auto_remove_dependencies and dependencies_to_check:
+            # For each dependency, check if it's still needed
+            for dep in dependencies_to_check:
+                if dep in self.processed_template["Resources"] and not self._is_resource_referenced(dep):
+                    # This dependency is no longer referenced, remove it recursively
+                    self.remove_resource(dep, auto_remove_dependencies=True)
+
+        # Also check for circular references (islands) that can be removed
         if auto_remove_dependencies:
             self.remove_dependencies(resource_name)
+
         return self
+
+    def _find_references_in_value(self, value: Any, target_resource: str) -> bool:
+        """
+        Recursively find if a value contains references to the target resource.
+
+        Args:
+            value: The value to check (can be dict, list, scalar, or CloudFormation tag)
+            target_resource: The resource name to look for
+
+        Returns:
+            True if the value contains a reference to the target resource
+        """
+        if isinstance(value, RefTag):
+            return value.value == target_resource
+        elif isinstance(value, GetAttTag):
+            return value.value[0] == target_resource
+        elif isinstance(value, SubTag):
+            # Check if resource is referenced in Sub string
+            if len(value.value) == 1:
+                # Simple string substitution
+                return f"${{{target_resource}}}" in value.value[0] or f"${{!{target_resource}}}" in value.value[0]
+            else:
+                # String with variable mapping
+                if f"${{{target_resource}}}" in value.value[0] or f"${{!{target_resource}}}" in value.value[0]:
+                    return True
+                # Check variable mapping
+                if isinstance(value.value[1], dict):
+                    return self._find_references_in_value(value.value[1], target_resource)
+        elif isinstance(value, (JoinTag, SplitTag, SelectTag, FindInMapTag, CidrTag)):
+            # These tags contain lists/sequences that might contain references
+            return self._find_references_in_value(value.value, target_resource)
+        elif isinstance(value, (Base64Tag, ImportValueTag, GetAZsTag)):
+            # These tags contain single values that might contain references
+            return self._find_references_in_value(value.value, target_resource)
+        elif isinstance(value, dict):
+            # Check Fn:: style functions
+            if "Ref" in value and value["Ref"] == target_resource:
+                return True
+            if "Fn::GetAtt" in value:
+                get_att_value = value["Fn::GetAtt"]
+                if isinstance(get_att_value, list) and len(get_att_value) > 0 and get_att_value[0] == target_resource:
+                    return True
+            if "Fn::Sub" in value:
+                sub_value = value["Fn::Sub"]
+                if isinstance(sub_value, str):
+                    return f"${{{target_resource}}}" in sub_value or f"${{!{target_resource}}}" in sub_value
+                elif isinstance(sub_value, list) and len(sub_value) > 0:
+                    return f"${{{target_resource}}}" in sub_value[0] or f"${{!{target_resource}}}" in sub_value[0]
+
+            # Recursively check all values in the dict
+            for v in value.values():
+                if self._find_references_in_value(v, target_resource):
+                    return True
+        elif isinstance(value, list):
+            # Recursively check all items in the list
+            for item in value:
+                if self._find_references_in_value(item, target_resource):
+                    return True
+        elif isinstance(value, str):
+            # Check for string references (unlikely but possible in some contexts)
+            return False
+
+        return False
+
+    def _get_resource_dependencies(self, resource_name: str) -> set[str]:
+        """
+        Get all resources that the given resource depends on.
+
+        Args:
+            resource_name: The resource to check dependencies for
+
+        Returns:
+            Set of resource names that this resource depends on
+        """
+        dependencies = set()
+
+        if "Resources" not in self.processed_template:
+            return dependencies
+
+        if resource_name not in self.processed_template["Resources"]:
+            return dependencies
+
+        resource = self.processed_template["Resources"][resource_name]
+
+        # Check all resources for references
+        for res_name in self.processed_template["Resources"]:
+            if res_name != resource_name and self._find_references_in_value(resource, res_name):
+                dependencies.add(res_name)
+
+        return dependencies
+
+    def _is_resource_referenced(self, resource_name: str) -> bool:
+        """
+        Check if a resource is referenced anywhere in the template.
+
+        Args:
+            resource_name: The resource name to check
+
+        Returns:
+            True if the resource is referenced anywhere
+        """
+        # Check in Resources section
+        if "Resources" in self.processed_template:
+            for res_name, resource in self.processed_template["Resources"].items():
+                if res_name != resource_name and self._find_references_in_value(resource, resource_name):
+                    return True
+
+        # Check in Outputs section
+        if "Outputs" in self.processed_template:
+            for output in self.processed_template["Outputs"].values():
+                if self._find_references_in_value(output, resource_name):
+                    return True
+
+        # Check in Conditions section
+        if "Conditions" in self.processed_template:
+            for condition in self.processed_template["Conditions"].values():
+                if self._find_references_in_value(condition, resource_name):
+                    return True
+
+        # Check in Mappings section (unlikely but possible)
+        if "Mappings" in self.processed_template:
+            for mapping in self.processed_template["Mappings"].values():
+                if self._find_references_in_value(mapping, resource_name):
+                    return True
+
+        return False
 
     def remove_dependencies(
         self,
         resource_name: str,
     ) -> "CloudFormationTemplateProcessor":
-        """Remove dependencies of a resource from the template."""
+        """
+        Remove dependencies of a resource from the template.
+
+        This method recursively removes all dependencies of the resource.
+        This method checks the references in the template and removes them if they are not used in any other resource.
+        Notes: CFN resource can be referenced in multiple places and by multiple ways.
+            For example !Ref or Ref can reference it.
+            Also !GetAtt can reference it (also Fn::GetAtt)
+            Also !Sub can reference it (also Fn::Sub)
+            Also !FindInMap can reference it (also Fn::FindInMap)
+            Also !Base64 can reference it (also Fn::Base64)
+            Also !Cidr can reference it (also Fn::Cidr)
+            Also !ImportValue can reference it (also Fn::ImportValue)
+            Also !GetAZs can reference it (also Fn::GetAZs)
+            Don't forget to implement recursive removal of dependencies.
+            Don't forget that resources can be referenced also in Outputs.
+        """
+        # After removing a resource, check for circular references (islands)
+        islands = self._find_resource_islands()
+        for island in islands:
+            for res_name in island:
+                if res_name in self.processed_template["Resources"]:
+                    self.processed_template["Resources"].pop(res_name)
+
         return self

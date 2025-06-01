@@ -297,3 +297,545 @@ def test_yaml_with_comments():
     result = load_yaml(yaml_content)
     assert isinstance(result["Resources"]["MyBucket"]["Properties"]["BucketName"], RefTag)
     assert result["Resources"]["MyBucket"]["Properties"]["BucketName"].value == "MyBucketName"
+
+
+# Tests for CloudFormationTemplateProcessor
+from sam_mocks.cfn import CloudFormationTemplateProcessor, load_yaml
+
+
+def test_remove_dependencies_simple_ref():
+    """Test removing dependencies with simple !Ref."""
+    yaml_content = """
+    Resources:
+      MyBucket:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: my-bucket
+      MyFunction:
+        Type: AWS::Lambda::Function
+        Properties:
+          Environment:
+            Variables:
+              BUCKET_NAME: !Ref MyBucket
+    """
+    template = load_yaml(yaml_content)
+
+    processor = CloudFormationTemplateProcessor(template)
+    processor.remove_resource("MyFunction")
+
+    # MyBucket should be removed as it's only referenced by MyFunction
+    assert "MyBucket" not in processor.processed_template["Resources"]
+    assert "MyFunction" not in processor.processed_template["Resources"]
+
+
+def test_remove_dependencies_multiple_references():
+    """Test removing dependencies when resource is referenced by multiple resources."""
+    yaml_content = """
+    Resources:
+      MyBucket:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: my-bucket
+      MyFunction1:
+        Type: AWS::Lambda::Function
+        Properties:
+          Environment:
+            Variables:
+              BUCKET_NAME: !Ref MyBucket
+      MyFunction2:
+        Type: AWS::Lambda::Function
+        Properties:
+          Environment:
+            Variables:
+              BUCKET_NAME: !Ref MyBucket
+    """
+    template = load_yaml(yaml_content)
+
+    processor = CloudFormationTemplateProcessor(template)
+    processor.remove_resource("MyFunction1")
+
+    # MyBucket should NOT be removed as it's still referenced by MyFunction2
+    assert "MyBucket" in processor.processed_template["Resources"]
+    assert "MyFunction1" not in processor.processed_template["Resources"]
+    assert "MyFunction2" in processor.processed_template["Resources"]
+
+
+def test_remove_dependencies_transitive():
+    """Test removing transitive dependencies."""
+    yaml_content = """
+    Resources:
+      MyBucket:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: my-bucket
+      MyBucketPolicy:
+        Type: AWS::S3::BucketPolicy
+        Properties:
+          Bucket: !Ref MyBucket
+          PolicyDocument: {}
+      MyFunction:
+        Type: AWS::Lambda::Function
+        Properties:
+          Environment:
+            Variables:
+              BUCKET_POLICY: !Ref MyBucketPolicy
+    """
+    template = load_yaml(yaml_content)
+
+    processor = CloudFormationTemplateProcessor(template)
+    processor.remove_resource("MyFunction")
+
+    # Both MyBucketPolicy and MyBucket should be removed (transitive)
+    assert "MyBucket" not in processor.processed_template["Resources"]
+    assert "MyBucketPolicy" not in processor.processed_template["Resources"]
+    assert "MyFunction" not in processor.processed_template["Resources"]
+
+
+def test_remove_dependencies_with_outputs():
+    """Test that resources referenced in Outputs are not removed."""
+    yaml_content = """
+    Resources:
+      MyBucket:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: my-bucket
+      MyFunction:
+        Type: AWS::Lambda::Function
+        Properties:
+          Environment:
+            Variables:
+              BUCKET_NAME: !Ref MyBucket
+    Outputs:
+      BucketName:
+        Value: !Ref MyBucket
+        Export:
+          Name: MyBucketName
+    """
+    template = load_yaml(yaml_content)
+
+    processor = CloudFormationTemplateProcessor(template)
+    processor.remove_resource("MyFunction")
+
+    # MyBucket should NOT be removed as it's referenced in Outputs
+    assert "MyBucket" in processor.processed_template["Resources"]
+    assert "MyFunction" not in processor.processed_template["Resources"]
+
+
+def test_remove_dependencies_get_att():
+    """Test removing dependencies with !GetAtt."""
+    yaml_content = """
+    Resources:
+      MyBucket:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: my-bucket
+      MyFunction:
+        Type: AWS::Lambda::Function
+        Properties:
+          Environment:
+            Variables:
+              BUCKET_ARN: !GetAtt
+                - MyBucket
+                - Arn
+    """
+    template = load_yaml(yaml_content)
+
+    processor = CloudFormationTemplateProcessor(template)
+    processor.remove_resource("MyFunction")
+
+    # MyBucket should be removed
+    assert "MyBucket" not in processor.processed_template["Resources"]
+    assert "MyFunction" not in processor.processed_template["Resources"]
+
+
+def test_remove_dependencies_sub_tag():
+    """Test removing dependencies with !Sub tag."""
+    yaml_content = """
+    Resources:
+      MyBucket:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: my-bucket
+      MyFunction:
+        Type: AWS::Lambda::Function
+        Properties:
+          Environment:
+            Variables:
+              BUCKET_REF: !Sub "${MyBucket}-suffix"
+    """
+    template = load_yaml(yaml_content)
+
+    processor = CloudFormationTemplateProcessor(template)
+    processor.remove_resource("MyFunction")
+
+    # MyBucket should be removed
+    assert "MyBucket" not in processor.processed_template["Resources"]
+    assert "MyFunction" not in processor.processed_template["Resources"]
+
+
+def test_remove_dependencies_fn_ref():
+    """Test removing dependencies with Fn::Ref (dict style)."""
+    yaml_content = """
+    Resources:
+      MyBucket:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: my-bucket
+      MyFunction:
+        Type: AWS::Lambda::Function
+        Properties:
+          Environment:
+            Variables:
+              BUCKET_NAME:
+                Ref: MyBucket
+    """
+    template = load_yaml(yaml_content)
+
+    processor = CloudFormationTemplateProcessor(template)
+    processor.remove_resource("MyFunction")
+
+    # MyBucket should be removed
+    assert "MyBucket" not in processor.processed_template["Resources"]
+    assert "MyFunction" not in processor.processed_template["Resources"]
+
+
+def test_remove_dependencies_fn_get_att():
+    """Test removing dependencies with Fn::GetAtt (dict style)."""
+    yaml_content = """
+    Resources:
+      MyBucket:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: my-bucket
+      MyFunction:
+        Type: AWS::Lambda::Function
+        Properties:
+          Environment:
+            Variables:
+              BUCKET_ARN:
+                Fn::GetAtt:
+                  - MyBucket
+                  - Arn
+    """
+    template = load_yaml(yaml_content)
+
+    processor = CloudFormationTemplateProcessor(template)
+    processor.remove_resource("MyFunction")
+
+    # MyBucket should be removed
+    assert "MyBucket" not in processor.processed_template["Resources"]
+    assert "MyFunction" not in processor.processed_template["Resources"]
+
+
+def test_remove_dependencies_nested_tags():
+    """Test removing dependencies with nested CloudFormation tags."""
+    yaml_content = """
+    Resources:
+      MyBucket:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: my-bucket
+      MyRole:
+        Type: AWS::IAM::Role
+        Properties:
+          AssumeRolePolicyDocument: {}
+      MyFunction:
+        Type: AWS::Lambda::Function
+        Properties:
+          Environment:
+            Variables:
+              RESOURCE_ARN: !Join
+                - ':'
+                - - arn:aws:s3
+                  - ''
+                  - ''
+                  - !GetAtt
+                    - MyBucket
+                    - Arn
+                  - !Ref MyRole
+    """
+    template = load_yaml(yaml_content)
+
+    processor = CloudFormationTemplateProcessor(template)
+    processor.remove_resource("MyFunction")
+
+    # Both MyBucket and MyRole should be removed
+    assert "MyBucket" not in processor.processed_template["Resources"]
+    assert "MyRole" not in processor.processed_template["Resources"]
+    assert "MyFunction" not in processor.processed_template["Resources"]
+
+
+def test_remove_dependencies_circular():
+    """Test removing dependencies with circular references."""
+    yaml_content = """
+    Resources:
+      ResourceA:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: !Ref ResourceB
+      ResourceB:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: !Ref ResourceA
+      MyFunction:
+        Type: AWS::Lambda::Function
+        Properties:
+          Environment:
+            Variables:
+              BUCKET_NAME: !Ref ResourceA
+    """
+    template = load_yaml(yaml_content)
+
+    processor = CloudFormationTemplateProcessor(template)
+    processor.remove_resource("MyFunction")
+
+    # ResourceA and ResourceB should both be removed despite circular reference
+    assert "ResourceA" not in processor.processed_template["Resources"]
+    assert "ResourceB" not in processor.processed_template["Resources"]
+    assert "MyFunction" not in processor.processed_template["Resources"]
+
+
+def test_remove_dependencies_in_conditions():
+    """Test that resources referenced in Conditions are not removed."""
+    yaml_content = """
+    Resources:
+      MyParameter:
+        Type: AWS::SSM::Parameter
+        Properties:
+          Value: test
+      MyFunction:
+        Type: AWS::Lambda::Function
+        Properties:
+          Environment:
+            Variables:
+              PARAM_NAME: !Ref MyParameter
+    Conditions:
+      IsProduction:
+        Fn::Equals:
+          - !Ref MyParameter
+          - prod
+    """
+    template = load_yaml(yaml_content)
+
+    processor = CloudFormationTemplateProcessor(template)
+    processor.remove_resource("MyFunction")
+
+    # MyParameter should NOT be removed as it's referenced in Conditions
+    assert "MyParameter" in processor.processed_template["Resources"]
+    assert "MyFunction" not in processor.processed_template["Resources"]
+
+
+def test_remove_dependencies_no_auto_remove():
+    """Test remove_resource with auto_remove_dependencies=False."""
+    template = {
+        "Resources": {
+            "MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": "my-bucket"}},
+            "MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Environment": {"Variables": {"BUCKET_NAME": RefTag("MyBucket")}}}},
+        }
+    }
+
+    processor = CloudFormationTemplateProcessor(template)
+    processor.remove_resource("MyFunction", auto_remove_dependencies=False)
+
+    # MyBucket should NOT be removed when auto_remove_dependencies=False
+    assert "MyBucket" in processor.processed_template["Resources"]
+    assert "MyFunction" not in processor.processed_template["Resources"]
+
+
+def test_remove_dependencies_complex_sub():
+    """Test removing dependencies with complex !Sub tag with variable mapping."""
+    template = {
+        "Resources": {
+            "MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": "my-bucket"}},
+            "MyRole": {"Type": "AWS::IAM::Role", "Properties": {"AssumeRolePolicyDocument": {}}},
+            "MyFunction": {
+                "Type": "AWS::Lambda::Function",
+                "Properties": {"Environment": {"Variables": {"RESOURCE_ARN": SubTag(["arn:aws:s3:::${BucketName}/${RoleName}", {"BucketName": RefTag("MyBucket"), "RoleName": RefTag("MyRole")}])}}},
+            },
+        }
+    }
+
+    processor = CloudFormationTemplateProcessor(template)
+    processor.remove_resource("MyFunction")
+
+    # Both MyBucket and MyRole should be removed
+    assert "MyBucket" not in processor.processed_template["Resources"]
+    assert "MyRole" not in processor.processed_template["Resources"]
+    assert "MyFunction" not in processor.processed_template["Resources"]
+
+
+def test_remove_dependencies_find_in_map():
+    """Test removing dependencies with !FindInMap containing references."""
+    template = {
+        "Resources": {
+            "MyParameter": {"Type": "AWS::SSM::Parameter", "Properties": {"Value": "test"}},
+            "MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"InstanceType": FindInMapTag(["RegionMap", RefTag("MyParameter"), "InstanceType"])}},
+        }
+    }
+
+    processor = CloudFormationTemplateProcessor(template)
+    processor.remove_resource("MyFunction")
+
+    # MyParameter should be removed
+    assert "MyParameter" not in processor.processed_template["Resources"]
+    assert "MyFunction" not in processor.processed_template["Resources"]
+
+
+def test_remove_dependencies_ref_and_fn_ref():
+    """Test removing dependencies with both !Ref and Fn::Ref."""
+    yaml_content = """
+    Resources:
+      MyBucket:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: my-bucket
+      MyFunction1:
+        Type: AWS::Lambda::Function
+        Properties:
+          Environment:
+            Variables:
+              BUCKET_NAME: !Ref MyBucket
+      MyFunction2:
+        Type: AWS::Lambda::Function
+        Properties:
+          Environment:
+            Variables:
+              BUCKET_NAME:
+                Ref: MyBucket
+    """
+    template = load_yaml(yaml_content)
+
+    processor = CloudFormationTemplateProcessor(template)
+    processor.remove_resource("MyFunction1")
+    processor.remove_resource("MyFunction2")
+
+    # MyBucket should be removed after both functions are removed
+    assert "MyBucket" not in processor.processed_template["Resources"]
+    assert "MyFunction1" not in processor.processed_template["Resources"]
+    assert "MyFunction2" not in processor.processed_template["Resources"]
+
+
+def test_remove_dependencies_getatt_and_fn_getatt():
+    """Test removing dependencies with both !GetAtt and Fn::GetAtt."""
+    yaml_content = """
+    Resources:
+      MyBucket:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: my-bucket
+      MyFunction1:
+        Type: AWS::Lambda::Function
+        Properties:
+          Environment:
+            Variables:
+              BUCKET_ARN: !GetAtt
+                - MyBucket
+                - Arn
+      MyFunction2:
+        Type: AWS::Lambda::Function
+        Properties:
+          Environment:
+            Variables:
+              BUCKET_ARN:
+                Fn::GetAtt:
+                  - MyBucket
+                  - Arn
+    """
+    template = load_yaml(yaml_content)
+
+    processor = CloudFormationTemplateProcessor(template)
+    processor.remove_resource("MyFunction1")
+
+    # MyBucket should NOT be removed as it's still referenced by MyFunction2
+    assert "MyBucket" in processor.processed_template["Resources"]
+    assert "MyFunction1" not in processor.processed_template["Resources"]
+    assert "MyFunction2" in processor.processed_template["Resources"]
+
+
+def test_remove_dependencies_sub_and_fn_sub():
+    """Test removing dependencies with both !Sub and Fn::Sub."""
+    yaml_content = """
+    Resources:
+      MyBucket:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: my-bucket
+      MyFunction1:
+        Type: AWS::Lambda::Function
+        Properties:
+          Environment:
+            Variables:
+              BUCKET_REF: !Sub "${MyBucket}-suffix"
+      MyFunction2:
+        Type: AWS::Lambda::Function
+        Properties:
+          Environment:
+            Variables:
+              BUCKET_REF:
+                Fn::Sub: "${MyBucket}-suffix"
+    """
+    template = load_yaml(yaml_content)
+
+    processor = CloudFormationTemplateProcessor(template)
+    processor.remove_resource("MyFunction1")
+    processor.remove_resource("MyFunction2")
+
+    # MyBucket should be removed after both functions are removed
+    assert "MyBucket" not in processor.processed_template["Resources"]
+    assert "MyFunction1" not in processor.processed_template["Resources"]
+    assert "MyFunction2" not in processor.processed_template["Resources"]
+
+
+def test_remove_dependencies_sub_with_exclamation():
+    """Test removing dependencies with !Sub containing ${!ResourceName}."""
+    yaml_content = """
+    Resources:
+      MyBucket:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: my-bucket
+      MyFunction:
+        Type: AWS::Lambda::Function
+        Properties:
+          Environment:
+            Variables:
+              BUCKET_ARN: !Sub "arn:aws:s3:::${!MyBucket}"
+    """
+    template = load_yaml(yaml_content)
+
+    processor = CloudFormationTemplateProcessor(template)
+    processor.remove_resource("MyFunction")
+
+    # MyBucket should be removed
+    assert "MyBucket" not in processor.processed_template["Resources"]
+    assert "MyFunction" not in processor.processed_template["Resources"]
+
+
+def test_remove_dependencies_multiple_refs_in_value():
+    """Test removing dependencies when a single value contains multiple references."""
+    yaml_content = """
+    Resources:
+      MyBucket:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: my-bucket
+      MyRole:
+        Type: AWS::IAM::Role
+        Properties:
+          AssumeRolePolicyDocument: {}
+      MyFunction:
+        Type: AWS::Lambda::Function
+        Properties:
+          Environment:
+            Variables:
+              COMBINED: !Sub "${MyBucket}:${MyRole}"
+    """
+    template = load_yaml(yaml_content)
+
+    processor = CloudFormationTemplateProcessor(template)
+    processor.remove_resource("MyFunction")
+
+    # Both MyBucket and MyRole should be removed
+    assert "MyBucket" not in processor.processed_template["Resources"]
+    assert "MyRole" not in processor.processed_template["Resources"]
+    assert "MyFunction" not in processor.processed_template["Resources"]
