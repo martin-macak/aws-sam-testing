@@ -49,4 +49,6 @@ dev = [
     "pyright>=1.1.401",
     "pytest>=8.3.5",
     "ruff>=0.11.12",
+    "moto>=5.1.5",
+    "openapi-spec-validator>=0.7.1",
 ]

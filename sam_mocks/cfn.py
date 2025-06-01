@@ -1,6 +1,7 @@
+import dataclasses
 import yaml
 import copy
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 def get_node_type_name(node: yaml.Node) -> str:
@@ -13,6 +14,21 @@ def get_node_type_name(node: yaml.Node) -> str:
         return "mapping"
     else:
         return "unknown"
+
+
+class ResourceMap:
+    def __init__(self, source: Any):
+        self.source = source
+
+    def get_resource(self, logical_id: str) -> Any:
+        if logical_id not in self.source.resources:
+            raise ValueError(f"Resource {logical_id} not found")
+
+        model = self.source[logical_id]
+        if not model:
+            raise ValueError(f"Resource {logical_id} not found")
+
+        return model
 
 
 class CloudFormationTag:
@@ -360,6 +376,140 @@ class CloudFormationTemplateProcessor:
         self.template = template
         self.processed_template = copy.deepcopy(template)
 
+    def load_resource_map(
+        self,
+        parameters: Optional[Dict[str, Any]] = None,
+        tags: Optional[Dict[str, Any]] = None,
+        aws_account_id: Optional[str] = None,
+        cross_stack_resources: Optional[Dict[str, Any]] = None,
+    ) -> ResourceMap:
+        from moto.cloudformation.parsing import ResourceMap as MotoResourceMap
+        from moto import mock_aws
+
+        with mock_aws():
+            resource_map = MotoResourceMap(
+                stack_id="stack-123",
+                stack_name="my-stack",
+                parameters=parameters or {},
+                tags=tags or {},
+                region_name="us-east-1",
+                account_id=aws_account_id or "123456789012",
+                template=self.processed_template,
+                cross_stack_resources=cross_stack_resources or {},
+            )
+
+        return ResourceMap(
+            source=resource_map,
+        )
+
+    def find_resources_by_type(self, resource_type: str) -> List[dict[str, Any]]:
+        """
+        Find all resources of a specific type in the template.
+
+        Args:
+            resource_type: The AWS resource type to search for (e.g., 'AWS::S3::Bucket',
+                'AWS::Lambda::Function', 'AWS::Serverless::Function')
+
+        Returns:
+            List of dictionaries, each containing:
+                - 'LogicalId': The logical ID of the resource
+                - 'Type': The resource type (same as input)
+                - 'Properties': The properties of the resource (if any)
+                - 'Metadata': The metadata of the resource (if any)
+                - 'DependsOn': The dependencies of the resource (if any)
+                - 'Condition': The condition of the resource (if any)
+                - 'DeletionPolicy': The deletion policy of the resource (if any)
+                - 'UpdateReplacePolicy': The update replace policy of the resource (if any)
+
+        Example:
+            >>> processor = CloudFormationTemplateProcessor(template)
+            >>> functions = processor.find_resources_by_type('AWS::Lambda::Function')
+            >>> for func in functions:
+            ...     print(f"Function: {func['LogicalId']}")
+        """
+        resources = []
+
+        if "Resources" not in self.processed_template:
+            return resources
+
+        for logical_id, resource in self.processed_template["Resources"].items():
+            if isinstance(resource, dict) and resource.get("Type") == resource_type:
+                # Create a resource dict with all available fields
+                resource_data = {"LogicalId": logical_id, "Type": resource["Type"]}
+
+                # Add optional fields if they exist
+                optional_fields = [
+                    "Properties",
+                    "Metadata",
+                    "DependsOn",
+                    "Condition",
+                    "DeletionPolicy",
+                    "UpdateReplacePolicy",
+                ]
+                for field in optional_fields:
+                    if field in resource:
+                        resource_data[field] = resource[field]
+
+                resources.append(resource_data)
+
+        return resources
+
+    def find_resource_by_logical_id(self, logical_id: str) -> dict[str, Any]:
+        """
+        Find a resource by its logical ID in the template.
+
+        Args:
+            logical_id: The logical ID of the resource to find
+
+        Returns:
+            Dictionary containing the resource data with the following structure:
+                - 'LogicalId': The logical ID of the resource (same as input)
+                - 'Type': The resource type
+                - 'Properties': The properties of the resource (if any)
+                - 'Metadata': The metadata of the resource (if any)
+                - 'DependsOn': The dependencies of the resource (if any)
+                - 'Condition': The condition of the resource (if any)
+                - 'DeletionPolicy': The deletion policy of the resource (if any)
+                - 'UpdateReplacePolicy': The update replace policy of the resource (if any)
+
+            Returns an empty dict if the resource is not found.
+
+        Example:
+            >>> processor = CloudFormationTemplateProcessor(template)
+            >>> bucket = processor.find_resource_by_logical_id('MyBucket')
+            >>> if bucket:
+            ...     print(f"Found {bucket['Type']}: {bucket['LogicalId']}")
+        """
+        if "Resources" not in self.processed_template:
+            return {}
+
+        if logical_id not in self.processed_template["Resources"]:
+            return {}
+
+        resource = self.processed_template["Resources"][logical_id]
+
+        # Ensure it's a valid resource dict
+        if not isinstance(resource, dict) or "Type" not in resource:
+            return {}
+
+        # Create a resource dict with all available fields
+        resource_data = {"LogicalId": logical_id, "Type": resource["Type"]}
+
+        # Add optional fields if they exist
+        optional_fields = [
+            "Properties",
+            "Metadata",
+            "DependsOn",
+            "Condition",
+            "DeletionPolicy",
+            "UpdateReplacePolicy",
+        ]
+        for field in optional_fields:
+            if field in resource:
+                resource_data[field] = resource[field]
+
+        return resource_data
+
     def _find_resource_islands(self) -> List[set[str]]:
         """
         Find groups of resources that only reference each other (islands).
@@ -696,97 +846,3 @@ class CloudFormationTemplateProcessor:
                     self.processed_template["Resources"].pop(resource_name)
 
         return self
-
-    def find_resources_by_type(self, resource_type: str) -> List[dict[str, Any]]:
-        """
-        Find all resources of a specific type in the template.
-
-        Args:
-            resource_type: The AWS resource type to search for (e.g., 'AWS::S3::Bucket',
-                'AWS::Lambda::Function', 'AWS::Serverless::Function')
-
-        Returns:
-            List of dictionaries, each containing:
-                - 'LogicalId': The logical ID of the resource
-                - 'Type': The resource type (same as input)
-                - 'Properties': The properties of the resource (if any)
-                - 'Metadata': The metadata of the resource (if any)
-                - 'DependsOn': The dependencies of the resource (if any)
-                - 'Condition': The condition of the resource (if any)
-                - 'DeletionPolicy': The deletion policy of the resource (if any)
-                - 'UpdateReplacePolicy': The update replace policy of the resource (if any)
-
-        Example:
-            >>> processor = CloudFormationTemplateProcessor(template)
-            >>> functions = processor.find_resources_by_type('AWS::Lambda::Function')
-            >>> for func in functions:
-            ...     print(f"Function: {func['LogicalId']}")
-        """
-        resources = []
-
-        if "Resources" not in self.processed_template:
-            return resources
-
-        for logical_id, resource in self.processed_template["Resources"].items():
-            if isinstance(resource, dict) and resource.get("Type") == resource_type:
-                # Create a resource dict with all available fields
-                resource_data = {"LogicalId": logical_id, "Type": resource["Type"]}
-
-                # Add optional fields if they exist
-                optional_fields = ["Properties", "Metadata", "DependsOn", "Condition", "DeletionPolicy", "UpdateReplacePolicy"]
-                for field in optional_fields:
-                    if field in resource:
-                        resource_data[field] = resource[field]
-
-                resources.append(resource_data)
-
-        return resources
-
-    def find_resource_by_logical_id(self, logical_id: str) -> dict[str, Any]:
-        """
-        Find a resource by its logical ID in the template.
-
-        Args:
-            logical_id: The logical ID of the resource to find
-
-        Returns:
-            Dictionary containing the resource data with the following structure:
-                - 'LogicalId': The logical ID of the resource (same as input)
-                - 'Type': The resource type
-                - 'Properties': The properties of the resource (if any)
-                - 'Metadata': The metadata of the resource (if any)
-                - 'DependsOn': The dependencies of the resource (if any)
-                - 'Condition': The condition of the resource (if any)
-                - 'DeletionPolicy': The deletion policy of the resource (if any)
-                - 'UpdateReplacePolicy': The update replace policy of the resource (if any)
-
-            Returns an empty dict if the resource is not found.
-
-        Example:
-            >>> processor = CloudFormationTemplateProcessor(template)
-            >>> bucket = processor.find_resource_by_logical_id('MyBucket')
-            >>> if bucket:
-            ...     print(f"Found {bucket['Type']}: {bucket['LogicalId']}")
-        """
-        if "Resources" not in self.processed_template:
-            return {}
-
-        if logical_id not in self.processed_template["Resources"]:
-            return {}
-
-        resource = self.processed_template["Resources"][logical_id]
-
-        # Ensure it's a valid resource dict
-        if not isinstance(resource, dict) or "Type" not in resource:
-            return {}
-
-        # Create a resource dict with all available fields
-        resource_data = {"LogicalId": logical_id, "Type": resource["Type"]}
-
-        # Add optional fields if they exist
-        optional_fields = ["Properties", "Metadata", "DependsOn", "Condition", "DeletionPolicy", "UpdateReplacePolicy"]
-        for field in optional_fields:
-            if field in resource:
-                resource_data[field] = resource[field]
-
-        return resource_data
