@@ -5,7 +5,7 @@ and SAM templates, including template loading, validation, and parsing.
 """
 
 from contextlib import contextmanager
-from typing import Generator, Optional, Union
+from typing import Any, Generator, Optional, Union
 from pathlib import Path
 import os
 
@@ -32,7 +32,11 @@ class CloudFormationTool:
         /my/project/template.yaml
     """
 
-    def __init__(self, working_dir: Optional[Union[str, Path]] = None, template_path: Optional[Union[str, Path]] = None) -> None:
+    def __init__(
+        self,
+        working_dir: Optional[Union[str, Path]] = None,
+        template_path: Optional[Union[str, Path]] = None,
+    ) -> None:
         """Initialize the CloudFormation tool.
 
         Args:
@@ -62,3 +66,29 @@ class CloudFormationTool:
 
         if not self.template_path.exists():
             raise FileNotFoundError(f"Template file not found at {self.template_path}")
+
+        self.template = _load_template(self.template_path)
+
+
+def _load_template(template_path: str | Path) -> dict[str, Any]:
+    """Load a CloudFormation template from a file.
+
+    Args:
+        template_path (str | Path): Path to the CloudFormation template file.
+
+    Raises:
+        FileNotFoundError: If the template file does not exist.
+
+    Returns:
+        dict[str, Any]: The loaded template.
+    """
+
+    if isinstance(template_path, str):
+        template_path = Path(template_path)
+
+    if not template_path.exists():
+        raise FileNotFoundError(f"Template file not found at {template_path}")
+
+    from sam_mocks.cfn import load_yaml
+
+    return load_yaml(template_path.read_text())
