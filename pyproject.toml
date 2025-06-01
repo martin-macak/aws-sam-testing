@@ -8,7 +8,9 @@ dynamic = ["version"]
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "aws-sam-cli>=1.139.0",
+]
 
 [tool.hatch.version]
 source = "uv-dynamic-versioning"
@@ -18,7 +20,7 @@ vcs = "git"
 style = "pep440"
 
 [tool.pyright]
-include = ["plldb"]
+include = ["sam_mocks"]
 venvPath = "."
 venv = ".venv"
 
@@ -35,7 +37,11 @@ target-version = "py310"
 
 [tool.pytest.ini_options]
 filterwarnings = [
-    'ignore:datetime\.datetime\.utcnow\(\) is deprecated:DeprecationWarning'
+    'ignore:datetime\.datetime\.utcnow\(\) is deprecated:DeprecationWarning',
+    'ignore:get_errors is deprecated and will be removed in a future release:DeprecationWarning',
+    'ignore:jsonschema.RefResolver is deprecated as of.*:DeprecationWarning',
+    'ignore:__init__ is deprecated and will be removed in a future release:DeprecationWarning',
+    'ignore:validate is deprecated and will be removed in a future release:DeprecationWarning',
 ]
 
 [dependency-groups]
