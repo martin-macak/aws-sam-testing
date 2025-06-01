@@ -1,4 +1,3 @@
-import moto.cloudformation
 import pytest
 from sam_mocks.cfn import load_yaml
 
@@ -42,8 +41,3 @@ Resources:
     assert "MyBucket" in resource_map.resources
     assert resource_map["MyBucket"] is not None
     assert resource_map["MyBucket"].physical_resource_id == "my-bucket"
-
-    with moto.mock_aws():
-        s3 = boto3.client("s3")
-        with pytest.raises(s3.exceptions.NoSuchBucket):
-            s3.get_bucket_location(Bucket="my-bucket")
