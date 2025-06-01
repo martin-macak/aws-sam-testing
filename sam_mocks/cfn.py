@@ -1,7 +1,7 @@
 import dataclasses
 import yaml
 import copy
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 def get_node_type_name(node: yaml.Node) -> str:
@@ -17,6 +17,8 @@ def get_node_type_name(node: yaml.Node) -> str:
 
 
 class ResourceMap:
+    """Provides access to loaded/inferred"""
+
     def __init__(self, source: Any):
         self.source = source
 
@@ -402,7 +404,7 @@ class CloudFormationTemplateProcessor:
             source=resource_map,
         )
 
-    def find_resources_by_type(self, resource_type: str) -> List[dict[str, Any]]:
+    def find_resources_by_type(self, resource_type: str) -> List[Tuple[str, dict[str, Any]]]:
         """
         Find all resources of a specific type in the template.
 
@@ -411,21 +413,24 @@ class CloudFormationTemplateProcessor:
                 'AWS::Lambda::Function', 'AWS::Serverless::Function')
 
         Returns:
-            List of dictionaries, each containing:
-                - 'LogicalId': The logical ID of the resource
-                - 'Type': The resource type (same as input)
-                - 'Properties': The properties of the resource (if any)
-                - 'Metadata': The metadata of the resource (if any)
-                - 'DependsOn': The dependencies of the resource (if any)
-                - 'Condition': The condition of the resource (if any)
-                - 'DeletionPolicy': The deletion policy of the resource (if any)
-                - 'UpdateReplacePolicy': The update replace policy of the resource (if any)
+            List of tuples, where each tuple contains:
+                - logical_id (str): The logical ID of the resource
+                - resource_data (dict): Dictionary containing:
+                    - 'LogicalId': The logical ID of the resource
+                    - 'Type': The resource type (same as input)
+                    - 'Properties': The properties of the resource (if any)
+                    - 'Metadata': The metadata of the resource (if any)
+                    - 'DependsOn': The dependencies of the resource (if any)
+                    - 'Condition': The condition of the resource (if any)
+                    - 'DeletionPolicy': The deletion policy of the resource (if any)
+                    - 'UpdateReplacePolicy': The update replace policy of the resource (if any)
 
         Example:
             >>> processor = CloudFormationTemplateProcessor(template)
             >>> functions = processor.find_resources_by_type('AWS::Lambda::Function')
-            >>> for func in functions:
-            ...     print(f"Function: {func['LogicalId']}")
+            >>> for logical_id, func_data in functions:
+            ...     print(f"Function: {logical_id}")
+            ...     print(f"Properties: {func_data['Properties']}")
         """
         resources = []
 
@@ -450,11 +455,11 @@ class CloudFormationTemplateProcessor:
                     if field in resource:
                         resource_data[field] = resource[field]
 
-                resources.append(resource_data)
+                resources.append((logical_id, resource_data))
 
         return resources
 
-    def find_resource_by_logical_id(self, logical_id: str) -> dict[str, Any]:
+    def find_resource_by_logical_id(self, logical_id: str) -> Tuple[str, dict[str, Any]]:
         """
         Find a resource by its logical ID in the template.
 
@@ -462,35 +467,37 @@ class CloudFormationTemplateProcessor:
             logical_id: The logical ID of the resource to find
 
         Returns:
-            Dictionary containing the resource data with the following structure:
-                - 'LogicalId': The logical ID of the resource (same as input)
-                - 'Type': The resource type
-                - 'Properties': The properties of the resource (if any)
-                - 'Metadata': The metadata of the resource (if any)
-                - 'DependsOn': The dependencies of the resource (if any)
-                - 'Condition': The condition of the resource (if any)
-                - 'DeletionPolicy': The deletion policy of the resource (if any)
-                - 'UpdateReplacePolicy': The update replace policy of the resource (if any)
+            Tuple containing:
+                - logical_id (str): The logical ID of the resource (same as input), or empty string if not found
+                - resource_data (dict): Dictionary containing the resource data with the following structure:
+                    - 'LogicalId': The logical ID of the resource (same as input)
+                    - 'Type': The resource type
+                    - 'Properties': The properties of the resource (if any)
+                    - 'Metadata': The metadata of the resource (if any)
+                    - 'DependsOn': The dependencies of the resource (if any)
+                    - 'Condition': The condition of the resource (if any)
+                    - 'DeletionPolicy': The deletion policy of the resource (if any)
+                    - 'UpdateReplacePolicy': The update replace policy of the resource (if any)
 
-            Returns an empty dict if the resource is not found.
+            Returns ("", {}) if the resource is not found.
 
         Example:
             >>> processor = CloudFormationTemplateProcessor(template)
-            >>> bucket = processor.find_resource_by_logical_id('MyBucket')
-            >>> if bucket:
-            ...     print(f"Found {bucket['Type']}: {bucket['LogicalId']}")
+            >>> logical_id, bucket_data = processor.find_resource_by_logical_id('MyBucket')
+            >>> if logical_id:
+            ...     print(f"Found {bucket_data['Type']}: {logical_id}")
         """
         if "Resources" not in self.processed_template:
-            return {}
+            return ("", {})
 
         if logical_id not in self.processed_template["Resources"]:
-            return {}
+            return ("", {})
 
         resource = self.processed_template["Resources"][logical_id]
 
         # Ensure it's a valid resource dict
         if not isinstance(resource, dict) or "Type" not in resource:
-            return {}
+            return ("", {})
 
         # Create a resource dict with all available fields
         resource_data = {"LogicalId": logical_id, "Type": resource["Type"]}
@@ -508,7 +515,7 @@ class CloudFormationTemplateProcessor:
             if field in resource:
                 resource_data[field] = resource[field]
 
-        return resource_data
+        return (logical_id, resource_data)
 
     def _find_resource_islands(self) -> List[set[str]]:
         """

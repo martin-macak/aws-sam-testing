@@ -1051,16 +1051,20 @@ class TestFindResources:
         # Find S3 buckets
         buckets = processor.find_resources_by_type("AWS::S3::Bucket")
         assert len(buckets) == 1
-        assert buckets[0]["LogicalId"] == "MyBucket"
-        assert buckets[0]["Type"] == "AWS::S3::Bucket"
-        assert buckets[0]["Properties"]["BucketName"] == "my-bucket"
+        logical_id, bucket_data = buckets[0]
+        assert logical_id == "MyBucket"
+        assert bucket_data["LogicalId"] == "MyBucket"
+        assert bucket_data["Type"] == "AWS::S3::Bucket"
+        assert bucket_data["Properties"]["BucketName"] == "my-bucket"
 
         # Find Lambda functions
         functions = processor.find_resources_by_type("AWS::Lambda::Function")
         assert len(functions) == 1
-        assert functions[0]["LogicalId"] == "MyFunction"
-        assert functions[0]["Type"] == "AWS::Lambda::Function"
-        assert functions[0]["Properties"]["FunctionName"] == "my-function"
+        logical_id, func_data = functions[0]
+        assert logical_id == "MyFunction"
+        assert func_data["LogicalId"] == "MyFunction"
+        assert func_data["Type"] == "AWS::Lambda::Function"
+        assert func_data["Properties"]["FunctionName"] == "my-function"
 
     def test_find_resources_by_type_multiple_matches(self):
         """Test finding resources by type with multiple matches."""
@@ -1087,11 +1091,11 @@ class TestFindResources:
         assert len(buckets) == 2
 
         # Check logical IDs
-        logical_ids = {bucket["LogicalId"] for bucket in buckets}
+        logical_ids = {logical_id for logical_id, _ in buckets}
         assert logical_ids == {"Bucket1", "Bucket2"}
 
         # Check properties
-        bucket_names = {bucket["Properties"]["BucketName"] for bucket in buckets}
+        bucket_names = {bucket_data["Properties"]["BucketName"] for _, bucket_data in buckets}
         assert bucket_names == {"bucket-1", "bucket-2"}
 
     def test_find_resources_by_type_no_matches(self):
@@ -1133,15 +1137,16 @@ class TestFindResources:
         functions = processor.find_resources_by_type("AWS::Lambda::Function")
         assert len(functions) == 1
 
-        func = functions[0]
-        assert func["LogicalId"] == "MyFunction"
-        assert func["Type"] == "AWS::Lambda::Function"
-        assert func["Properties"]["FunctionName"] == "my-function"
-        assert func["Metadata"]["BuildMethod"] == "go1.x"
-        assert func["DependsOn"] == ["MyRole", "MyBucket"]
-        assert func["Condition"] == "IsProduction"
-        assert func["DeletionPolicy"] == "Retain"
-        assert func["UpdateReplacePolicy"] == "Delete"
+        logical_id, func_data = functions[0]
+        assert logical_id == "MyFunction"
+        assert func_data["LogicalId"] == "MyFunction"
+        assert func_data["Type"] == "AWS::Lambda::Function"
+        assert func_data["Properties"]["FunctionName"] == "my-function"
+        assert func_data["Metadata"]["BuildMethod"] == "go1.x"
+        assert func_data["DependsOn"] == ["MyRole", "MyBucket"]
+        assert func_data["Condition"] == "IsProduction"
+        assert func_data["DeletionPolicy"] == "Retain"
+        assert func_data["UpdateReplacePolicy"] == "Delete"
 
     def test_find_resources_by_type_empty_template(self):
         """Test finding resources in an empty template."""
@@ -1170,11 +1175,12 @@ class TestFindResources:
         template = load_yaml(yaml_content)
         processor = CloudFormationTemplateProcessor(template)
 
-        bucket = processor.find_resource_by_logical_id("MyBucket")
-        assert bucket["LogicalId"] == "MyBucket"
-        assert bucket["Type"] == "AWS::S3::Bucket"
-        assert bucket["Properties"]["BucketName"] == "my-bucket"
-        assert bucket["Metadata"]["Documentation"] == "Test bucket"
+        logical_id, bucket_data = processor.find_resource_by_logical_id("MyBucket")
+        assert logical_id == "MyBucket"
+        assert bucket_data["LogicalId"] == "MyBucket"
+        assert bucket_data["Type"] == "AWS::S3::Bucket"
+        assert bucket_data["Properties"]["BucketName"] == "my-bucket"
+        assert bucket_data["Metadata"]["Documentation"] == "Test bucket"
 
     def test_find_resource_by_logical_id_not_found(self):
         """Test finding a resource by logical ID when it doesn't exist."""
@@ -1188,8 +1194,9 @@ class TestFindResources:
         template = load_yaml(yaml_content)
         processor = CloudFormationTemplateProcessor(template)
 
-        resource = processor.find_resource_by_logical_id("NonExistentResource")
-        assert resource == {}
+        logical_id, resource_data = processor.find_resource_by_logical_id("NonExistentResource")
+        assert logical_id == ""
+        assert resource_data == {}
 
     def test_find_resource_by_logical_id_with_all_fields(self):
         """Test finding a resource that has all optional fields."""
@@ -1209,42 +1216,47 @@ class TestFindResources:
         template = load_yaml(yaml_content)
         processor = CloudFormationTemplateProcessor(template)
 
-        db = processor.find_resource_by_logical_id("MyDatabase")
-        assert db["LogicalId"] == "MyDatabase"
-        assert db["Type"] == "AWS::RDS::DBInstance"
-        assert db["Properties"]["DBInstanceIdentifier"] == "my-database"
-        assert db["Metadata"]["Version"] == "1.0"
-        assert db["DependsOn"] == "MySecurityGroup"
-        assert db["Condition"] == "IsProduction"
-        assert db["DeletionPolicy"] == "Snapshot"
-        assert db["UpdateReplacePolicy"] == "Retain"
+        logical_id, db_data = processor.find_resource_by_logical_id("MyDatabase")
+        assert logical_id == "MyDatabase"
+        assert db_data["LogicalId"] == "MyDatabase"
+        assert db_data["Type"] == "AWS::RDS::DBInstance"
+        assert db_data["Properties"]["DBInstanceIdentifier"] == "my-database"
+        assert db_data["Metadata"]["Version"] == "1.0"
+        assert db_data["DependsOn"] == "MySecurityGroup"
+        assert db_data["Condition"] == "IsProduction"
+        assert db_data["DeletionPolicy"] == "Snapshot"
+        assert db_data["UpdateReplacePolicy"] == "Retain"
 
     def test_find_resource_by_logical_id_empty_template(self):
         """Test finding a resource in an empty template."""
         processor = CloudFormationTemplateProcessor({})
-        resource = processor.find_resource_by_logical_id("MyBucket")
-        assert resource == {}
+        logical_id, resource_data = processor.find_resource_by_logical_id("MyBucket")
+        assert logical_id == ""
+        assert resource_data == {}
 
     def test_find_resource_by_logical_id_no_resources_section(self):
         """Test finding a resource when Resources section is missing."""
         template = {"Parameters": {"Test": {"Type": "String"}}}
         processor = CloudFormationTemplateProcessor(template)
-        resource = processor.find_resource_by_logical_id("MyBucket")
-        assert resource == {}
+        logical_id, resource_data = processor.find_resource_by_logical_id("MyBucket")
+        assert logical_id == ""
+        assert resource_data == {}
 
     def test_find_resource_by_logical_id_invalid_resource(self):
         """Test finding a resource that exists but has invalid structure."""
         template = {"Resources": {"InvalidResource": "This is not a valid resource dict"}}
         processor = CloudFormationTemplateProcessor(template)
-        resource = processor.find_resource_by_logical_id("InvalidResource")
-        assert resource == {}
+        logical_id, resource_data = processor.find_resource_by_logical_id("InvalidResource")
+        assert logical_id == ""
+        assert resource_data == {}
 
     def test_find_resource_by_logical_id_missing_type(self):
         """Test finding a resource that exists but has no Type field."""
         template = {"Resources": {"InvalidResource": {"Properties": {"Name": "test"}}}}
         processor = CloudFormationTemplateProcessor(template)
-        resource = processor.find_resource_by_logical_id("InvalidResource")
-        assert resource == {}
+        logical_id, resource_data = processor.find_resource_by_logical_id("InvalidResource")
+        assert logical_id == ""
+        assert resource_data == {}
 
     def test_find_resources_by_type_with_tags(self):
         """Test finding resources that contain CloudFormation tags in properties."""
@@ -1269,13 +1281,15 @@ class TestFindResources:
         # Find S3 bucket with Ref tag
         buckets = processor.find_resources_by_type("AWS::S3::Bucket")
         assert len(buckets) == 1
-        assert isinstance(buckets[0]["Properties"]["BucketName"], RefTag)
-        assert buckets[0]["Properties"]["BucketName"].value == "BucketNameParam"
+        _, bucket_data = buckets[0]
+        assert isinstance(bucket_data["Properties"]["BucketName"], RefTag)
+        assert bucket_data["Properties"]["BucketName"].value == "BucketNameParam"
 
         # Find Lambda function with GetAtt tag
         functions = processor.find_resources_by_type("AWS::Lambda::Function")
         assert len(functions) == 1
-        env_vars = functions[0]["Properties"]["Environment"]["Variables"]
+        _, func_data = functions[0]
+        env_vars = func_data["Properties"]["Environment"]["Variables"]
         assert isinstance(env_vars["BUCKET_ARN"], GetAttTag)
         assert env_vars["BUCKET_ARN"].value == ["MyBucket", "Arn"]
 
@@ -1300,12 +1314,14 @@ class TestFindResources:
         # Find serverless functions
         serverless_funcs = processor.find_resources_by_type("AWS::Serverless::Function")
         assert len(serverless_funcs) == 1
-        assert serverless_funcs[0]["LogicalId"] == "MyServerlessFunction"
+        logical_id, _ = serverless_funcs[0]
+        assert logical_id == "MyServerlessFunction"
 
         # Find lambda functions (different type)
         lambda_funcs = processor.find_resources_by_type("AWS::Lambda::Function")
         assert len(lambda_funcs) == 1
-        assert lambda_funcs[0]["LogicalId"] == "MyLambdaFunction"
+        logical_id, _ = lambda_funcs[0]
+        assert logical_id == "MyLambdaFunction"
 
     def test_find_resources_case_sensitive(self):
         """Test that resource type matching is case-sensitive."""
