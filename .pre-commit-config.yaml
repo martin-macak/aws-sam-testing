@@ -15,7 +15,7 @@ repos:
         always_run: true
       - id: test
         name: Run tests
-        entry: make test
+        entry: uv run pytest -m "not slow"
         language: system
         pass_filenames: false
         always_run: true

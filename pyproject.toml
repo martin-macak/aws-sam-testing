@@ -44,6 +44,9 @@ filterwarnings = [
     'ignore:__init__ is deprecated and will be removed in a future release:DeprecationWarning',
     'ignore:validate is deprecated and will be removed in a future release:DeprecationWarning',
 ]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
 
 [dependency-groups]
 dev = [

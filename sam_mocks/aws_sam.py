@@ -9,6 +9,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Generator, Optional, Union
 
+from sam_mocks.cfn import CloudFormationTemplateProcessor
 from sam_mocks.core import CloudFormationTool
 
 
@@ -110,6 +111,7 @@ class AWSSAMToolkit(CloudFormationTool):
     def sam_build(
         self,
         build_dir: Optional[Union[str, Path]] = None,
+        clean: bool = True,
     ) -> Path:
         """Build the SAM application.
 
@@ -133,8 +135,9 @@ class AWSSAMToolkit(CloudFormationTool):
             build_dir.mkdir(parents=True, exist_ok=True)
 
         # Remove all files in the build directory
-        for file in build_dir.iterdir():
-            file.unlink()
+        if clean:
+            for file in build_dir.iterdir():
+                file.unlink()
 
         # Call SAM build
         with TemporaryDirectory() as cache_dir:
@@ -184,6 +187,9 @@ class AWSSAMToolkit(CloudFormationTool):
             ...     # Make requests to the local API
             ...     pass
         """
+        import yaml
+        from samcli.commands.local.cli_common.invoke_context import InvokeContext
+
         # Validate parameters
         if port is not None and (port < 1 or port > 65535):
             raise ValueError(f"Port must be between 1 and 65535, got {port}")
@@ -191,18 +197,24 @@ class AWSSAMToolkit(CloudFormationTool):
         if host is not None and not host.strip():
             raise ValueError("Host cannot be empty")
 
-        apis = self.cfn_processor.find_resources_by_type("AWS::Serverless::Api")
+        cfn_processor = CloudFormationTemplateProcessor(self.template)
+
+        # Find API resources
+        apis = cfn_processor.find_resources_by_type("AWS::Serverless::Api")
         if not apis:
+            # At least one API resource is required
             raise ValueError("No API resources found in template")
 
+        # Multiple API resources leads to ambiguity, so we require a logical ID
         if not api_logical_id and len(apis) > 1:
             raise ValueError("Multiple API resources found in template, please specify a logical ID")
 
         if api_logical_id:
-            logical_id, api_data = self.cfn_processor.find_resource_by_logical_id(api_logical_id)
+            logical_id, api_data = cfn_processor.find_resource_by_logical_id(api_logical_id)
         elif len(apis) == 1:
             logical_id, api_data = apis[0]
         else:
+            # If no logical ID is provided and there are multiple API resources, we raise an error
             raise ValueError("Multiple API resources found in template, please specify a logical ID")
 
         if not api_data:
@@ -210,6 +222,35 @@ class AWSSAMToolkit(CloudFormationTool):
 
         if not api_data.get("Type") == "AWS::Serverless::Api":
             raise ValueError(f"Resource with logical ID {api_logical_id} is not an API resource")
+
+        # Now we need to remove the API resources and their dependencies, because sam local start-api can
+        # safely execute only stacks with a single API resource.
+        apis_to_remove = [api for api in apis if api[0] != logical_id]
+        if apis_to_remove:
+            for api in apis_to_remove:
+                cfn_processor.remove_resource(api[0])
+            final_template = cfn_processor.processed_template.copy()
+        else:
+            final_template = cfn_processor.processed_template.copy()
+
+        # We need to create a new template and build it so we can run the API locally
+        final_template_path = Path(self.working_dir) / "template-sam-mocks.yaml"
+        with open(final_template_path, "w") as f:
+            yaml.dump(final_template, f)
+        processed_tool = AWSSAMToolkit(
+            working_dir=self.working_dir,
+            template_path=final_template_path,
+        )
+        sam_mocks_template_path = processed_tool.sam_build()
+
+        with InvokeContext(
+            template_file=str(sam_mocks_template_path),
+            function_identifier=None,
+            env_vars_file=None,
+            docker_volume_basedir=None,
+            docker_network=None,
+        ) as _:
+            pass
 
         local_api = LocalApi(
             toolkit=self,

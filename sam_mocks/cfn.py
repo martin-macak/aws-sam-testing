@@ -378,6 +378,9 @@ class CloudFormationTemplateProcessor:
         self.template = template
         self.processed_template = copy.deepcopy(template)
 
+    def reset(self):
+        self.processed_template = copy.deepcopy(self.template)
+
     def load_resource_map(
         self,
         parameters: Optional[Dict[str, Any]] = None,

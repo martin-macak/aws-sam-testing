@@ -8,8 +8,6 @@ import os
 from pathlib import Path
 from typing import Any, Optional, Union
 
-from sam_mocks.cfn import CloudFormationTemplateProcessor
-
 
 class CloudFormationTool:
     """Base class for CloudFormation template operations.
@@ -69,7 +67,6 @@ class CloudFormationTool:
             raise FileNotFoundError(f"Template file not found at {self.template_path}")
 
         self.template = _load_template(self.template_path)
-        self.cfn_processor = CloudFormationTemplateProcessor(self.template)
 
 
 def _load_template(template_path: str | Path) -> dict[str, Any]:
