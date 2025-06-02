@@ -1,7 +1,7 @@
-import dataclasses
-import yaml
 import copy
 from typing import Any, Dict, List, Optional, Tuple
+
+import yaml
 
 
 def get_node_type_name(node: yaml.Node) -> str:
@@ -385,8 +385,8 @@ class CloudFormationTemplateProcessor:
         aws_account_id: Optional[str] = None,
         cross_stack_resources: Optional[Dict[str, Any]] = None,
     ) -> ResourceMap:
-        from moto.cloudformation.parsing import ResourceMap as MotoResourceMap
         from moto import mock_aws
+        from moto.cloudformation.parsing import ResourceMap as MotoResourceMap
 
         with mock_aws():
             resource_map = MotoResourceMap(

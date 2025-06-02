@@ -1,4 +1,3 @@
-import pytest
 from sam_mocks.cfn import load_yaml
 
 
@@ -17,7 +16,6 @@ Resources:
                 Ref: BucketName
     """
 
-    import boto3
     import moto
     from moto.cloudformation.parsing import ResourceMap
 

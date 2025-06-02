@@ -19,6 +19,7 @@ pyright:
 	uv run pyright
 
 format:
+	uv run ruff check --fix
 	uv run ruff format
 
 # Publish to PyPI

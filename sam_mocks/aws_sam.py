@@ -5,13 +5,11 @@ including API Gateway emulation and CloudFormation template handling.
 """
 
 from contextlib import contextmanager
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Generator, Optional, Union
-import os
 
 from sam_mocks.core import CloudFormationTool
-
-from enum import Enum
 
 
 class IsolationLevel(Enum):
@@ -121,9 +119,10 @@ class AWSSAMToolkit(CloudFormationTool):
         Returns:
             Path: The path to the build directory.
         """
-        from samcli.commands.build.build_context import BuildContext
-        from tempfile import TemporaryDirectory
         import os
+        from tempfile import TemporaryDirectory
+
+        from samcli.commands.build.build_context import BuildContext
 
         if build_dir is None:
             build_dir = Path(self.working_dir) / ".aws-sam" / "sam-mocks-build"

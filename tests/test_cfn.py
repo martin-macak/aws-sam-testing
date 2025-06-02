@@ -1,18 +1,19 @@
 import pytest
+
 from sam_mocks.cfn import (
-    CloudFormationTemplateProcessor,
-    load_yaml,
-    RefTag,
-    GetAttTag,
-    SubTag,
-    JoinTag,
-    SplitTag,
-    SelectTag,
-    FindInMapTag,
     Base64Tag,
     CidrTag,
-    ImportValueTag,
+    CloudFormationTemplateProcessor,
+    FindInMapTag,
+    GetAttTag,
     GetAZsTag,
+    ImportValueTag,
+    JoinTag,
+    RefTag,
+    SelectTag,
+    SplitTag,
+    SubTag,
+    load_yaml,
 )
 
 

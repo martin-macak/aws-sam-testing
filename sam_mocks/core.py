@@ -4,10 +4,9 @@ This module provides the base functionality for working with CloudFormation
 and SAM templates, including template loading, validation, and parsing.
 """
 
-from contextlib import contextmanager
-from typing import Any, Generator, Optional, Union
-from pathlib import Path
 import os
+from pathlib import Path
+from typing import Any, Optional, Union
 
 from sam_mocks.cfn import CloudFormationTemplateProcessor
 

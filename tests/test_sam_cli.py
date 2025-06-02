@@ -2,8 +2,9 @@ from pathlib import Path
 
 
 def test_sam_cli_build(tmp_path: Path):
-    from samcli.commands.build.build_context import BuildContext
     import os
+
+    from samcli.commands.build.build_context import BuildContext
 
     example_template = """
     Resources:
