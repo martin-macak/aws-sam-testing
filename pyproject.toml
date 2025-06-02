@@ -43,6 +43,7 @@ filterwarnings = [
     'ignore:jsonschema.RefResolver is deprecated as of.*:DeprecationWarning',
     'ignore:__init__ is deprecated and will be removed in a future release:DeprecationWarning',
     'ignore:validate is deprecated and will be removed in a future release:DeprecationWarning',
+    'ignore:This process \(pid=\d+\).*is multi-threaded.*:DeprecationWarning',
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",

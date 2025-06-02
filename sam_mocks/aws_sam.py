@@ -9,6 +9,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Generator, Optional, Union
 
+from samcli.commands.local.cli_common.invoke_context import InvokeContext
+
 from sam_mocks.cfn import CloudFormationTemplateProcessor
 from sam_mocks.core import CloudFormationTool
 
@@ -46,6 +48,7 @@ class LocalApi:
 
     def __init__(
         self,
+        ctx: InvokeContext,
         toolkit: CloudFormationTool,
         api_logical_id: str,
         api_data: dict[str, Any],
@@ -54,6 +57,7 @@ class LocalApi:
         host: Optional[str] = None,
         parameters: Optional[Dict[str, Any]] = None,
     ) -> None:
+        self.ctx = ctx
         self.toolkit = toolkit
         self.api_logical_id = api_logical_id
         self.api_data = api_data
@@ -61,19 +65,32 @@ class LocalApi:
         self.isolation_level = isolation_level
         self.port = port
         self.host = host
+        self.is_running = False
 
     def __enter__(self) -> "LocalApi":
+        self.start()
+
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.stop()
+
+    def start(self) -> None:
+        if self.is_running:
+            return
+
         if self.port is None:
             from sam_mocks.util import find_free_port
 
             self.port = find_free_port()
 
-        return self
+        self.is_running = True
 
-    def __exit__(self, exc_type, exc_value, traceback) -> None:
-        # TODO: Implement cleanup logic when API server functionality is added
-        # For example: stop running server, cleanup temp files, etc.
-        pass
+    def stop(self) -> None:
+        if not self.is_running:
+            return
+
+        self.is_running = False
 
 
 class AWSSAMToolkit(CloudFormationTool):
@@ -111,7 +128,6 @@ class AWSSAMToolkit(CloudFormationTool):
     def sam_build(
         self,
         build_dir: Optional[Union[str, Path]] = None,
-        clean: bool = True,
     ) -> Path:
         """Build the SAM application.
 
@@ -135,9 +151,8 @@ class AWSSAMToolkit(CloudFormationTool):
             build_dir.mkdir(parents=True, exist_ok=True)
 
         # Remove all files in the build directory
-        if clean:
-            for file in build_dir.iterdir():
-                file.unlink()
+        for file in build_dir.iterdir():
+            file.unlink(missing_ok=True)
 
         # Call SAM build
         with TemporaryDirectory() as cache_dir:
@@ -163,11 +178,10 @@ class AWSSAMToolkit(CloudFormationTool):
     def run_local_api(
         self,
         isolation_level: IsolationLevel = IsolationLevel.NONE,
-        api_logical_id: Optional[str] = None,
         parameters: Optional[Dict[str, Any]] = None,
         port: Optional[int] = None,
         host: Optional[str] = None,
-    ) -> Generator[LocalApi, None, None]:
+    ) -> Generator[list[LocalApi], None, None]:
         """Run a local API Gateway instance for testing.
 
         This context manager starts a local API Gateway emulator for the specified
@@ -205,61 +219,68 @@ class AWSSAMToolkit(CloudFormationTool):
             # At least one API resource is required
             raise ValueError("No API resources found in template")
 
-        # Multiple API resources leads to ambiguity, so we require a logical ID
-        if not api_logical_id and len(apis) > 1:
-            raise ValueError("Multiple API resources found in template, please specify a logical ID")
+        api_handers = []
 
-        if api_logical_id:
-            logical_id, api_data = cfn_processor.find_resource_by_logical_id(api_logical_id)
-        elif len(apis) == 1:
-            logical_id, api_data = apis[0]
-        else:
-            # If no logical ID is provided and there are multiple API resources, we raise an error
-            raise ValueError("Multiple API resources found in template, please specify a logical ID")
+        for api in apis:
+            api_logical_id = api[0]
+            api_data = api[1]
 
-        if not api_data:
-            raise ValueError(f"API resource with logical ID {api_logical_id} not found")
+            # Now we need to remove the API resources and their dependencies, because sam local start-api can
+            # safely execute only stacks with a single API resource.
+            apis_to_remove = [api for api in apis if api[0] != api_logical_id]
+            api_stack_cfn_processor = CloudFormationTemplateProcessor(self.template)
+            if apis_to_remove:
+                for api in apis_to_remove:
+                    api_stack_cfn_processor.remove_resource(api[0])
+                api_stack_template = api_stack_cfn_processor.processed_template.copy()
+            else:
+                api_stack_template = api_stack_cfn_processor.processed_template.copy()
 
-        if not api_data.get("Type") == "AWS::Serverless::Api":
-            raise ValueError(f"Resource with logical ID {api_logical_id} is not an API resource")
+            # We need to create a new template and build it so we can run the API locally
+            # The file is created in the same directory as the original template so all the relative paths are correct
+            # The built template must be removed so it does not stick around after the build is done:
+            api_stack_template_path = Path(self.template_path.parent) / f"template-sam-mocks-{api_logical_id}.yaml"
+            with open(api_stack_template_path, "w") as f:
+                yaml.dump(api_stack_template, f)
 
-        # Now we need to remove the API resources and their dependencies, because sam local start-api can
-        # safely execute only stacks with a single API resource.
-        apis_to_remove = [api for api in apis if api[0] != logical_id]
-        if apis_to_remove:
-            for api in apis_to_remove:
-                cfn_processor.remove_resource(api[0])
-            final_template = cfn_processor.processed_template.copy()
-        else:
-            final_template = cfn_processor.processed_template.copy()
+            # Build the API stack template
+            # Also delete the template after the build is done
+            try:
+                api_stack_tool = AWSSAMToolkit(
+                    working_dir=self.working_dir,
+                    template_path=api_stack_template_path,
+                )
+                api_stack_template_path = api_stack_tool.sam_build(
+                    build_dir=Path(self.working_dir) / ".aws-sam" / "sam-mocks-build" / f"api-stack-{api_logical_id}",
+                )
+            finally:
+                api_stack_template_path.unlink(missing_ok=True)
 
-        # We need to create a new template and build it so we can run the API locally
-        final_template_path = Path(self.working_dir) / "template-sam-mocks.yaml"
-        with open(final_template_path, "w") as f:
-            yaml.dump(final_template, f)
-        processed_tool = AWSSAMToolkit(
-            working_dir=self.working_dir,
-            template_path=final_template_path,
-        )
-        sam_mocks_template_path = processed_tool.sam_build()
+            with InvokeContext(
+                template_file=str(api_stack_template_path),
+                function_identifier=None,
+                env_vars_file=None,
+                docker_volume_basedir=None,
+                docker_network=None,
+            ) as ctx:
+                local_api = LocalApi(
+                    ctx=ctx,
+                    toolkit=self,
+                    api_logical_id=api_logical_id,
+                    api_data=api_data,
+                    parameters=parameters,
+                    isolation_level=isolation_level,
+                    port=port,
+                    host=host,
+                )
 
-        with InvokeContext(
-            template_file=str(sam_mocks_template_path),
-            function_identifier=None,
-            env_vars_file=None,
-            docker_volume_basedir=None,
-            docker_network=None,
-        ) as _:
-            pass
+            api_handers.append(local_api)
 
-        local_api = LocalApi(
-            toolkit=self,
-            api_logical_id=logical_id,
-            api_data=api_data,
-            parameters=parameters,
-            isolation_level=isolation_level,
-            port=port,
-            host=host,
-        )
+        for api_handler in api_handers:
+            api_handler.start()
 
-        yield local_api
+        try:
+            yield api_handers
+        finally:
+            for api_handler in api_handers:
+                api_handler.stop()
