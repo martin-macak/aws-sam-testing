@@ -1,0 +1,61 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Simple API SAM Template
+  
+Globals:
+  Function:
+    Timeout: 3
+    MemorySize: 128
+    Runtime: python3.12
+
+Resources:
+  MyApi1:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: Prod
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowOrigin: "'*'"
+
+  MyApi2:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: Prod
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowOrigin: "'*'"
+
+  HelloWorldFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: hello_world/
+      Handler: app.lambda_handler
+      Events:
+        HelloWorld1:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MyApi1
+            Path: /hello
+            Method: get
+        HelloWorld2:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MyApi2
+            Path: /hello
+            Method: get
+
+Outputs:
+  HelloWorldApi:
+    Description: API Gateway endpoint URL for Hello World function
+    Value: !Sub "https://${MyApi1}.execute-api.${AWS::Region}.amazonaws.com/Prod/hello/"
+  HelloWorldApi2:
+    Description: API Gateway endpoint URL for Hello World function
+    Value: !Sub "https://${MyApi2}.execute-api.${AWS::Region}.amazonaws.com/Prod/hello/"
+  HelloWorldFunction:
+    Description: Hello World Lambda Function ARN
+    Value: !GetAtt HelloWorldFunction.Arn
+  HelloWorldFunctionIamRole:
+    Description: Implicit IAM Role created for Hello World function
+    Value: !GetAtt HelloWorldFunctionRole.Arn
