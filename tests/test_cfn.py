@@ -31,7 +31,7 @@ class TestCloudFormationLoader:
           """,
             {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": RefTag("MyBucketName")}}}},
         ),
-        # GetAtt tag tests
+        # GetAtt tag tests - array notation
         (
             """
           Resources:
@@ -43,6 +43,30 @@ class TestCloudFormationLoader:
                   - PublicDnsName
           """,
             {"Resources": {"MyInstance": {"Type": "AWS::EC2::Instance", "Properties": {"UserData": GetAttTag(["MyInstance", "PublicDnsName"])}}}},
+        ),
+        # GetAtt tag tests - dot notation
+        (
+            """
+          Resources:
+            MyInstance:
+              Type: AWS::EC2::Instance
+              Properties:
+                UserData: !GetAtt MyInstance.PublicDnsName
+          """,
+            {"Resources": {"MyInstance": {"Type": "AWS::EC2::Instance", "Properties": {"UserData": GetAttTag(["MyInstance", "PublicDnsName"])}}}},
+        ),
+        # GetAtt tag tests - dot notation with nested attributes
+        (
+            """
+          Resources:
+            MyFunction:
+              Type: AWS::Lambda::Function
+              Properties:
+                Environment:
+                  Variables:
+                    ROLE_ARN: !GetAtt HelloWorldFunctionRole.Arn
+          """,
+            {"Resources": {"MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Environment": {"Variables": {"ROLE_ARN": GetAttTag(["HelloWorldFunctionRole", "Arn"])}}}}}},
         ),
         # Sub tag tests
         (
@@ -171,7 +195,16 @@ class TestCloudFormationLoader:
           Properties:
             BucketName: !Ref
       """,
-        # Invalid GetAtt tag (wrong number of arguments)
+        # Invalid GetAtt tag (array notation with wrong number of arguments)
+        """
+      Resources:
+        MyInstance:
+          Type: AWS::EC2::Instance
+          Properties:
+            UserData: !GetAtt 
+              - MyInstance
+      """,
+        # Invalid GetAtt tag (dot notation without dot)
         """
       Resources:
         MyInstance:
@@ -431,6 +464,30 @@ class TestCloudFormationTemplateProcessor:
                 BUCKET_ARN: !GetAtt
                   - MyBucket
                   - Arn
+      """
+        template = load_yaml(yaml_content)
+
+        processor = CloudFormationTemplateProcessor(template)
+        processor.remove_resource("MyFunction")
+
+        # MyBucket should be removed
+        assert "MyBucket" not in processor.processed_template["Resources"]
+        assert "MyFunction" not in processor.processed_template["Resources"]
+
+    def test_remove_dependencies_get_att_dot_notation(self):
+        """Test removing dependencies with !GetAtt using dot notation."""
+        yaml_content = """
+      Resources:
+        MyBucket:
+          Type: AWS::S3::Bucket
+          Properties:
+            BucketName: my-bucket
+        MyFunction:
+          Type: AWS::Lambda::Function
+          Properties:
+            Environment:
+              Variables:
+                BUCKET_ARN: !GetAtt MyBucket.Arn
       """
         template = load_yaml(yaml_content)
 
