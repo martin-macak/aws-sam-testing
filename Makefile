@@ -4,7 +4,7 @@ all: init build
 
 # Initialize development environment
 init:
-	rm -rf .venv/lib/python3.13/site-packages/sam_mocks-*
+	rm -rf .venv/lib/python3.13/site-packages/aws_sam_testing-*
 	uv sync --dev --no-cache
 
 # Build the package

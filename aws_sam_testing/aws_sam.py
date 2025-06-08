@@ -11,8 +11,8 @@ from typing import Any, Dict, Generator, Optional, Union
 
 from samcli.commands.local.cli_common.invoke_context import InvokeContext
 
-from sam_mocks.cfn import CloudFormationTemplateProcessor
-from sam_mocks.core import CloudFormationTool
+from aws_sam_testing.cfn import CloudFormationTemplateProcessor
+from aws_sam_testing.core import CloudFormationTool
 
 
 class IsolationLevel(Enum):
@@ -80,7 +80,7 @@ class LocalApi:
             return
 
         if self.port is None:
-            from sam_mocks.util import find_free_port
+            from aws_sam_testing.util import find_free_port
 
             self.port = find_free_port()
 
@@ -143,7 +143,7 @@ class AWSSAMToolkit(CloudFormationTool):
         from samcli.commands.build.build_context import BuildContext
 
         if build_dir is None:
-            build_dir = Path(self.working_dir) / ".aws-sam" / "sam-mocks-build"
+            build_dir = Path(self.working_dir) / ".aws-sam" / "aws-sam-testing-build"
         elif isinstance(build_dir, str):
             build_dir = Path(build_dir)
 
@@ -239,7 +239,7 @@ class AWSSAMToolkit(CloudFormationTool):
             # We need to create a new template and build it so we can run the API locally
             # The file is created in the same directory as the original template so all the relative paths are correct
             # The built template must be removed so it does not stick around after the build is done:
-            api_stack_template_path = Path(self.template_path.parent) / f"template-sam-mocks-{api_logical_id}.yaml"
+            api_stack_template_path = Path(self.template_path.parent) / f"template-aws-sam-testing-{api_logical_id}.yaml"
             with open(api_stack_template_path, "w") as f:
                 yaml.dump(api_stack_template, f)
 
@@ -251,7 +251,7 @@ class AWSSAMToolkit(CloudFormationTool):
                     template_path=api_stack_template_path,
                 )
                 api_stack_template_path = api_stack_tool.sam_build(
-                    build_dir=Path(self.working_dir) / ".aws-sam" / "sam-mocks-build" / f"api-stack-{api_logical_id}",
+                    build_dir=Path(self.working_dir) / ".aws-sam" / "aws-sam-testing-build" / f"api-stack-{api_logical_id}",
                 )
             finally:
                 api_stack_template_path.unlink(missing_ok=True)

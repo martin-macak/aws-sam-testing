@@ -1,6 +1,6 @@
 import pytest
 
-from sam_mocks.cfn import (
+from aws_sam_testing.cfn import (
     Base64Tag,
     CidrTag,
     CloudFormationTemplateProcessor,

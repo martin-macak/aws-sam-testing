@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from sam_mocks.aws_sam import AWSSAMToolkit
+from aws_sam_testing.aws_sam import AWSSAMToolkit
 
 
 class TestAWSSAMToolkit:

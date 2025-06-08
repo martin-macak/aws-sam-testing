@@ -88,6 +88,6 @@ def _load_template(template_path: str | Path) -> dict[str, Any]:
     if not template_path.exists():
         raise FileNotFoundError(f"Template file not found at {template_path}")
 
-    from sam_mocks.cfn import load_yaml
+    from aws_sam_testing.cfn import load_yaml
 
     return load_yaml(template_path.read_text())

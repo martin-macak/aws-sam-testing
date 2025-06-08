@@ -3,7 +3,7 @@ requires = ["hatchling", "uv-dynamic-versioning"]
 build-backend = "hatchling.build"
 
 [project]
-name = "sam-mocks"
+name = "aws-sam-testing"
 dynamic = ["version"]
 description = "Add your description here"
 readme = "README.md"
@@ -20,7 +20,7 @@ vcs = "git"
 style = "pep440"
 
 [tool.pyright]
-include = ["sam_mocks"]
+include = ["aws_sam_testing"]
 venvPath = "."
 venv = ".venv"
 

@@ -81,6 +81,34 @@ wheels = [
 ]
 
 [[package]]
+name = "aws-sam-testing"
+source = { editable = "." }
+dependencies = [
+    { name = "aws-sam-cli" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "moto" },
+    { name = "openapi-spec-validator" },
+    { name = "pyright" },
+    { name = "pytest" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "aws-sam-cli", specifier = ">=1.139.0" }]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "moto", specifier = ">=5.1.5" },
+    { name = "openapi-spec-validator", specifier = ">=0.7.1" },
+    { name = "pyright", specifier = ">=1.1.401" },
+    { name = "pytest", specifier = ">=8.3.5" },
+    { name = "ruff", specifier = ">=0.11.12" },
+]
+
+[[package]]
 name = "aws-sam-translator"
 version = "1.97.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1175,34 +1203,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ed/5d/9dcc100abc6711e8247af5aa561fc07c4a046f72f659c3adea9a449e191a/s3transfer-0.13.0.tar.gz", hash = "sha256:f5e6db74eb7776a37208001113ea7aa97695368242b364d73e91c981ac522177", size = 150232, upload-time = "2025-05-22T19:24:50.245Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/18/17/22bf8155aa0ea2305eefa3a6402e040df7ebe512d1310165eda1e233c3f8/s3transfer-0.13.0-py3-none-any.whl", hash = "sha256:0148ef34d6dd964d0d8cf4311b2b21c474693e57c2e069ec708ce043d2b527be", size = 85152, upload-time = "2025-05-22T19:24:48.703Z" },
-]
-
-[[package]]
-name = "sam-mocks"
-source = { editable = "." }
-dependencies = [
-    { name = "aws-sam-cli" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "moto" },
-    { name = "openapi-spec-validator" },
-    { name = "pyright" },
-    { name = "pytest" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "aws-sam-cli", specifier = ">=1.139.0" }]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "moto", specifier = ">=5.1.5" },
-    { name = "openapi-spec-validator", specifier = ">=0.7.1" },
-    { name = "pyright", specifier = ">=1.1.401" },
-    { name = "pytest", specifier = ">=8.3.5" },
-    { name = "ruff", specifier = ">=0.11.12" },
 ]
 
 [[package]]

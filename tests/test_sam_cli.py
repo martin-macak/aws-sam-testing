@@ -53,7 +53,7 @@ def test_sam_local_api(tmp_path: Path):
     from samcli.commands.local.lib.local_api_service import LocalApiService
     from samcli.local.docker.exceptions import ProcessSigTermException
 
-    from sam_mocks.util import find_free_port
+    from aws_sam_testing.util import find_free_port
 
     example_template = """
     Resources:

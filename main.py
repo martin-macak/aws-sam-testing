@@ -1,5 +1,5 @@
 def main():
-    print("Hello from sam-mocks!")
+    print("Hello from aws-sam-testing!")
 
 
 if __name__ == "__main__":

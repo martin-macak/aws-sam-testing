@@ -1,4 +1,4 @@
-from sam_mocks.cfn import load_yaml
+from aws_sam_testing.cfn import load_yaml
 
 
 def test_cloudformation_load():
