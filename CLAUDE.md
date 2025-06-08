@@ -141,3 +141,7 @@ processor.save()
 ## Workflow Guidance
 
 - When you fix a GitHub issue then create a PR and describe your fixes properly.
+
+## Memory Guidance
+
+- Issues are always defined as GitHub issues, so refer directly to the GitHub to get their list and descriptions.
