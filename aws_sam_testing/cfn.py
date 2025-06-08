@@ -131,22 +131,37 @@ def construct_ref(loader: yaml.Loader, node: yaml.Node) -> RefTag:
 
 def construct_get_att(loader: yaml.Loader, node: yaml.Node) -> GetAttTag:
     """Construct !GetAtt tag."""
-    if not isinstance(node, yaml.SequenceNode):
+    if isinstance(node, yaml.SequenceNode):
+        # Array notation: !GetAtt [LogicalName, AttributeName]
+        value = loader.construct_sequence(node)
+        if len(value) != 2:
+            raise yaml.constructor.ConstructorError(
+                None,
+                None,
+                "expected 2 items in sequence, but found %d" % len(value),
+                node.start_mark,
+            )
+        return GetAttTag(value)
+    elif isinstance(node, yaml.ScalarNode):
+        # Dot notation: !GetAtt LogicalName.AttributeName
+        value = loader.construct_scalar(node)
+        if not value or "." not in value:
+            raise yaml.constructor.ConstructorError(
+                None,
+                None,
+                "!GetAtt scalar must be in format 'LogicalName.AttributeName'",
+                node.start_mark,
+            )
+        # Split only on the first dot to handle nested attributes
+        parts = value.split(".", 1)
+        return GetAttTag(parts)
+    else:
         raise yaml.constructor.ConstructorError(
             None,
             None,
-            "expected a sequence node, but found %s" % get_node_type_name(node),
+            "expected a sequence or scalar node, but found %s" % get_node_type_name(node),
             node.start_mark,
         )
-    value = loader.construct_sequence(node)
-    if len(value) != 2:
-        raise yaml.constructor.ConstructorError(
-            None,
-            None,
-            "expected 2 items in sequence, but found %d" % len(value),
-            node.start_mark,
-        )
-    return GetAttTag(value)
 
 
 def construct_sub(loader: yaml.Loader, node: yaml.Node) -> SubTag:
