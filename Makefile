@@ -18,6 +18,11 @@ test:
 test-stacks:
 	uv run pytest test_stacks/
 
+test-examples:
+	for example in examples/*; do \
+		uv --directory $$example run --active pytest tests/; \
+	done
+
 pyright:
 	uv run pyright
 
