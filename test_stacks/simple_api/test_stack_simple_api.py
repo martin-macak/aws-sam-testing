@@ -3,11 +3,16 @@ def test_sanity():
 
 
 def test_build_with_toolkit():
-    pass
+    from pathlib import Path
 
-    # toolkit = AWSSAMToolkit(
-    #     working_dir=Path(__file__).parent,
-    #     template_path=Path(__file__).parent / "template.yaml",
-    # )
+    from aws_sam_testing.aws_sam import AWSSAMToolkit
 
-    # toolkit.sam_build()
+    toolkit = AWSSAMToolkit(
+        working_dir=Path(__file__).parent,
+        template_path=Path(__file__).parent / "template.yaml",
+    )
+
+    toolkit.sam_build()
+
+    p_built_template = Path(__file__).parent / ".aws-sam" / "aws-sam-testing-build" / "template.yaml"
+    assert p_built_template.exists()

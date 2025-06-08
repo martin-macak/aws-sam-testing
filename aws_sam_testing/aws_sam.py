@@ -138,6 +138,7 @@ class AWSSAMToolkit(CloudFormationTool):
             Path: The path to the build directory.
         """
         import os
+        import shutil
         from tempfile import TemporaryDirectory
 
         from samcli.commands.build.build_context import BuildContext
@@ -147,12 +148,12 @@ class AWSSAMToolkit(CloudFormationTool):
         elif isinstance(build_dir, str):
             build_dir = Path(build_dir)
 
+        # Remove the build directory and all its contents
+        if build_dir.exists():
+            shutil.rmtree(build_dir)
+
         if not build_dir.exists():
             build_dir.mkdir(parents=True, exist_ok=True)
-
-        # Remove all files in the build directory
-        for file in build_dir.iterdir():
-            file.unlink(missing_ok=True)
 
         # Call SAM build
         with TemporaryDirectory() as cache_dir:
