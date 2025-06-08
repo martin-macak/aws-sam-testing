@@ -133,3 +133,11 @@ processor = CloudFormationTemplateProcessor("template.yaml")
 processor.remove_resource("MyResource")
 processor.save()
 ```
+
+## Branch Naming Conventions
+
+- Always create `fix/<issue_number>-<issue_name>` branch when fixing GitHub issues. Use GitHub and Git naming conventions for branch name and allowed characters.
+
+## Workflow Guidance
+
+- When you fix a GitHub issue then create a PR and describe your fixes properly.
