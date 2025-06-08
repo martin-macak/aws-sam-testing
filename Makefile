@@ -15,6 +15,9 @@ build: init
 test:
 	uv run pytest tests/
 
+test-stacks:
+	uv run pytest test_stacks/
+
 pyright:
 	uv run pyright
 
