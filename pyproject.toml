@@ -11,6 +11,12 @@ requires-python = ">=3.13"
 dependencies = [
     "aws-sam-cli>=1.139.0",
 ]
+classifiers = [
+    "Framework :: Pytest",
+]
+
+[project.entry-points.pytest11]
+aws_lambda_context = "aws_sam_testing.pytest.aws_lambda_context"
 
 [tool.hatch.version]
 source = "uv-dynamic-versioning"
