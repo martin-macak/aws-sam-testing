@@ -14,4 +14,6 @@ dev = [
     "moto>=5.1.5",
     "openapi-spec-validator>=0.7.1",
     "aws-sam-testing @ file://${PROJECT_ROOT}/",
+    "aws-lambda-powertools[aws-sdk]>=3.14.0",
+    "aws-xray-sdk>=2.14.0",
 ]
