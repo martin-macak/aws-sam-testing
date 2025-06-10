@@ -266,9 +266,15 @@ def _transform_template(
     aws_account_id: str,
     packaging_bucket_name: str,
 ) -> dict:
-    import copy
+    from aws_sam_testing.cfn import CloudFormationTemplateProcessor
 
-    transformed_template = copy.deepcopy(template)
+    transformed_template = (
+        CloudFormationTemplateProcessor(
+            template=template,
+        )
+        .transform_cfn_tags()
+        .processed_template
+    )
 
     globals = transformed_template.get("Globals", {})
     global_environment_variables = globals.get("Function", {}).get("Environment", {}).get("Variables", {})

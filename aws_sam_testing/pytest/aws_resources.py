@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Generator
 
@@ -34,6 +35,15 @@ class ResourceManager:
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.manager.__exit__(exc_type, exc_value, traceback)
+
+    @contextmanager
+    def set_environment(
+        self,
+        lambda_function_logical_name: str,
+        additional_environment: dict = {},
+    ):
+        with self.manager.set_environment(lambda_function_logical_name, additional_environment):
+            yield self
 
 
 @pytest.fixture

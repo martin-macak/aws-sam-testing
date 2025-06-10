@@ -1,3 +1,5 @@
+import copy
+
 import pytest
 
 from aws_sam_testing.cfn import (
@@ -1400,6 +1402,317 @@ class TestFindResources:
         # Wrong case
         buckets_lower = processor.find_resources_by_type("aws::s3::bucket")
         assert len(buckets_lower) == 0
+
+
+class TestTransformCfnTags:
+    # Test data for transform_cfn_tags parametrized tests
+    TRANSFORM_TAG_TESTS = [
+        # !Ref -> Ref
+        (
+            {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": RefTag("MyParameter")}}}},
+            {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": {"Ref": "MyParameter"}}}}},
+            "!Ref tag transformation",
+        ),
+        # !GetAtt with array notation -> Fn::GetAtt (no change needed)
+        (
+            {"Resources": {"MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Role": GetAttTag(["MyRole", "Arn"])}}}},
+            {"Resources": {"MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Role": {"Fn::GetAtt": ["MyRole", "Arn"]}}}}},
+            "!GetAtt array notation transformation",
+        ),
+        # !GetAtt with dot notation (converted to array) -> Fn::GetAtt
+        (
+            {"Resources": {"MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Role": GetAttTag(["MyRole", "Arn"])}}}},
+            {"Resources": {"MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Role": {"Fn::GetAtt": ["MyRole", "Arn"]}}}}},
+            "!GetAtt dot notation transformation (already converted to array by parser)",
+        ),
+        # !Sub simple -> Fn::Sub
+        (
+            {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": SubTag(["${AWS::StackName}-bucket"])}}}},
+            {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": {"Fn::Sub": "${AWS::StackName}-bucket"}}}}},
+            "!Sub simple transformation",
+        ),
+        # !Sub with variable mapping -> Fn::Sub
+        (
+            {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": SubTag(["${BucketPrefix}-bucket", {"BucketPrefix": RefTag("BucketParam")}])}}}},
+            {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": {"Fn::Sub": ["${BucketPrefix}-bucket", {"BucketPrefix": {"Ref": "BucketParam"}}]}}}}},
+            "!Sub with variable mapping transformation",
+        ),
+        # !Join -> Fn::Join
+        (
+            {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": JoinTag(["-", ["prefix", RefTag("Suffix")]])}}}},
+            {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": {"Fn::Join": ["-", ["prefix", {"Ref": "Suffix"}]]}}}}},
+            "!Join transformation with nested tags",
+        ),
+        # !Split -> Fn::Split
+        (
+            {"Resources": {"MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Handler": SplitTag([".", RefTag("HandlerParam")])}}}},
+            {"Resources": {"MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Handler": {"Fn::Split": [".", {"Ref": "HandlerParam"}]}}}}},
+            "!Split transformation with nested tag",
+        ),
+        # !Select -> Fn::Select
+        (
+            {"Resources": {"MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Runtime": SelectTag([0, RefTag("RuntimesList")])}}}},
+            {"Resources": {"MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Runtime": {"Fn::Select": [0, {"Ref": "RuntimesList"}]}}}}},
+            "!Select transformation with nested tag",
+        ),
+        # !FindInMap -> Fn::FindInMap
+        (
+            {"Resources": {"MyInstance": {"Type": "AWS::EC2::Instance", "Properties": {"InstanceType": FindInMapTag(["RegionMap", RefTag("AWS::Region"), "InstanceType"])}}}},
+            {"Resources": {"MyInstance": {"Type": "AWS::EC2::Instance", "Properties": {"InstanceType": {"Fn::FindInMap": ["RegionMap", {"Ref": "AWS::Region"}, "InstanceType"]}}}}},
+            "!FindInMap transformation with nested tag",
+        ),
+        # !Base64 -> Fn::Base64
+        (
+            {"Resources": {"MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Code": Base64Tag(SubTag(["echo ${Message}"]))}}}},
+            {"Resources": {"MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Code": {"Fn::Base64": {"Fn::Sub": "echo ${Message}"}}}}}},
+            "!Base64 transformation with nested tag",
+        ),
+        # !Cidr -> Fn::Cidr
+        (
+            {"Resources": {"MyVPC": {"Type": "AWS::EC2::VPC", "Properties": {"CidrBlock": CidrTag([RefTag("VPCCidr"), 8, 8])}}}},
+            {"Resources": {"MyVPC": {"Type": "AWS::EC2::VPC", "Properties": {"CidrBlock": {"Fn::Cidr": [{"Ref": "VPCCidr"}, 8, 8]}}}}},
+            "!Cidr transformation with nested tag",
+        ),
+        # !ImportValue -> Fn::ImportValue
+        (
+            {"Outputs": {"MyOutput": {"Value": ImportValueTag(SubTag(["${StackName}-export"]))}}},
+            {"Outputs": {"MyOutput": {"Value": {"Fn::ImportValue": {"Fn::Sub": "${StackName}-export"}}}}},
+            "!ImportValue transformation with nested tag",
+        ),
+        # !GetAZs -> Fn::GetAZs
+        (
+            {"Resources": {"MyVPC": {"Type": "AWS::EC2::VPC", "Properties": {"AvailabilityZones": GetAZsTag(RefTag("AWS::Region"))}}}},
+            {"Resources": {"MyVPC": {"Type": "AWS::EC2::VPC", "Properties": {"AvailabilityZones": {"Fn::GetAZs": {"Ref": "AWS::Region"}}}}}},
+            "!GetAZs transformation with nested tag",
+        ),
+    ]
+
+    @pytest.mark.parametrize("input_template,expected_template,description", TRANSFORM_TAG_TESTS)
+    def test_transform_single_tag(self, input_template, expected_template, description):
+        """Test transformation of individual CloudFormation tags."""
+        processor = CloudFormationTemplateProcessor(input_template)
+        processor.transform_cfn_tags()
+        assert processor.processed_template == expected_template, f"Failed: {description}"
+
+    def test_transform_deeply_nested_tags(self):
+        """Test transformation of deeply nested CloudFormation tags."""
+        template = {
+            "Resources": {
+                "MyFunction": {
+                    "Type": "AWS::Lambda::Function",
+                    "Properties": {
+                        "Environment": {
+                            "Variables": {
+                                "COMPLEX_VAR": JoinTag(
+                                    [
+                                        ":",
+                                        [
+                                            SelectTag([0, SplitTag([",", RefTag("ListParam")])]),
+                                            GetAttTag(["MyBucket", "Arn"]),
+                                            SubTag(["${Prefix}-${Suffix}", {"Prefix": RefTag("PrefixParam"), "Suffix": RefTag("SuffixParam")}]),
+                                        ],
+                                    ]
+                                )
+                            }
+                        }
+                    },
+                }
+            }
+        }
+
+        expected = {
+            "Resources": {
+                "MyFunction": {
+                    "Type": "AWS::Lambda::Function",
+                    "Properties": {
+                        "Environment": {
+                            "Variables": {
+                                "COMPLEX_VAR": {
+                                    "Fn::Join": [
+                                        ":",
+                                        [
+                                            {"Fn::Select": [0, {"Fn::Split": [",", {"Ref": "ListParam"}]}]},
+                                            {"Fn::GetAtt": ["MyBucket", "Arn"]},
+                                            {"Fn::Sub": ["${Prefix}-${Suffix}", {"Prefix": {"Ref": "PrefixParam"}, "Suffix": {"Ref": "SuffixParam"}}]},
+                                        ],
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                }
+            }
+        }
+
+        processor = CloudFormationTemplateProcessor(template)
+        processor.transform_cfn_tags()
+        assert processor.processed_template == expected
+
+    def test_transform_multiple_resources(self):
+        """Test transformation across multiple resources."""
+        template = {
+            "Resources": {
+                "MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": RefTag("BucketNameParam")}},
+                "MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Environment": {"Variables": {"BUCKET_ARN": GetAttTag(["MyBucket", "Arn"]), "BUCKET_NAME": RefTag("BucketNameParam")}}}},
+            },
+            "Outputs": {"BucketArn": {"Value": GetAttTag(["MyBucket", "Arn"])}, "FunctionName": {"Value": RefTag("MyFunction")}},
+        }
+
+        expected = {
+            "Resources": {
+                "MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": {"Ref": "BucketNameParam"}}},
+                "MyFunction": {
+                    "Type": "AWS::Lambda::Function",
+                    "Properties": {"Environment": {"Variables": {"BUCKET_ARN": {"Fn::GetAtt": ["MyBucket", "Arn"]}, "BUCKET_NAME": {"Ref": "BucketNameParam"}}}},
+                },
+            },
+            "Outputs": {"BucketArn": {"Value": {"Fn::GetAtt": ["MyBucket", "Arn"]}}, "FunctionName": {"Value": {"Ref": "MyFunction"}}},
+        }
+
+        processor = CloudFormationTemplateProcessor(template)
+        processor.transform_cfn_tags()
+        assert processor.processed_template == expected
+
+    def test_transform_empty_template(self):
+        """Test transformation on empty template."""
+        processor = CloudFormationTemplateProcessor({})
+        processor.transform_cfn_tags()
+        assert processor.processed_template == {}
+
+    def test_transform_no_tags(self):
+        """Test transformation on template without any tags."""
+        template = {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": "my-static-bucket"}}}}
+        processor = CloudFormationTemplateProcessor(template)
+        processor.transform_cfn_tags()
+        assert processor.processed_template == template
+
+    def test_transform_mixed_tags_and_intrinsic_functions(self):
+        """Test transformation when template already has some intrinsic functions."""
+        template = {
+            "Resources": {
+                "MyBucket": {
+                    "Type": "AWS::S3::Bucket",
+                    "Properties": {
+                        "BucketName": RefTag("BucketParam"),
+                        "Tags": [
+                            {"Key": "Name", "Value": {"Ref": "NameParam"}},  # Already in intrinsic function format
+                            {"Key": "Env", "Value": RefTag("EnvParam")},  # Tag format
+                        ],
+                    },
+                }
+            }
+        }
+
+        expected = {
+            "Resources": {
+                "MyBucket": {
+                    "Type": "AWS::S3::Bucket",
+                    "Properties": {"BucketName": {"Ref": "BucketParam"}, "Tags": [{"Key": "Name", "Value": {"Ref": "NameParam"}}, {"Key": "Env", "Value": {"Ref": "EnvParam"}}]},
+                }
+            }
+        }
+
+        processor = CloudFormationTemplateProcessor(template)
+        processor.transform_cfn_tags()
+        assert processor.processed_template == expected
+
+    def test_transform_preserves_original_template(self):
+        """Test that transform_cfn_tags doesn't modify the original template."""
+        original_template = {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": RefTag("BucketParam")}}}}
+
+        # Create a copy to verify original isn't modified
+        template_copy = copy.deepcopy(original_template)
+
+        processor = CloudFormationTemplateProcessor(original_template)
+        processor.transform_cfn_tags()
+
+        # Original template should remain unchanged
+        assert original_template == template_copy
+        # Processed template should be transformed
+        assert processor.processed_template != original_template
+        assert processor.processed_template == {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": {"Ref": "BucketParam"}}}}}
+
+    def test_transform_with_lists_of_tags(self):
+        """Test transformation of lists containing tags."""
+        template = {
+            "Resources": {
+                "MySecurityGroup": {
+                    "Type": "AWS::EC2::SecurityGroup",
+                    "Properties": {
+                        "SecurityGroupIngress": [
+                            {"IpProtocol": "tcp", "FromPort": 80, "ToPort": 80, "SourceSecurityGroupId": RefTag("WebSecurityGroup")},
+                            {"IpProtocol": "tcp", "FromPort": 443, "ToPort": 443, "SourceSecurityGroupId": GetAttTag(["ALBSecurityGroup", "GroupId"])},
+                        ]
+                    },
+                }
+            }
+        }
+
+        expected = {
+            "Resources": {
+                "MySecurityGroup": {
+                    "Type": "AWS::EC2::SecurityGroup",
+                    "Properties": {
+                        "SecurityGroupIngress": [
+                            {"IpProtocol": "tcp", "FromPort": 80, "ToPort": 80, "SourceSecurityGroupId": {"Ref": "WebSecurityGroup"}},
+                            {"IpProtocol": "tcp", "FromPort": 443, "ToPort": 443, "SourceSecurityGroupId": {"Fn::GetAtt": ["ALBSecurityGroup", "GroupId"]}},
+                        ]
+                    },
+                }
+            }
+        }
+
+        processor = CloudFormationTemplateProcessor(template)
+        processor.transform_cfn_tags()
+        assert processor.processed_template == expected
+
+    def test_transform_all_sections(self):
+        """Test transformation across all CloudFormation template sections."""
+        template = {
+            "Parameters": {"BucketParam": {"Type": "String", "Default": "my-bucket"}},
+            "Conditions": {"IsProduction": {"Fn::Equals": [RefTag("Environment"), "prod"]}, "HasBucket": {"Fn::Not": [{"Fn::Equals": [RefTag("BucketParam"), ""]}]}},
+            "Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Condition": "HasBucket", "Properties": {"BucketName": RefTag("BucketParam")}}},
+            "Outputs": {"BucketArn": {"Condition": "HasBucket", "Value": GetAttTag(["MyBucket", "Arn"]), "Export": {"Name": SubTag(["${AWS::StackName}-bucket-arn"])}}},
+        }
+
+        expected = {
+            "Parameters": {"BucketParam": {"Type": "String", "Default": "my-bucket"}},
+            "Conditions": {"IsProduction": {"Fn::Equals": [{"Ref": "Environment"}, "prod"]}, "HasBucket": {"Fn::Not": [{"Fn::Equals": [{"Ref": "BucketParam"}, ""]}]}},
+            "Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Condition": "HasBucket", "Properties": {"BucketName": {"Ref": "BucketParam"}}}},
+            "Outputs": {"BucketArn": {"Condition": "HasBucket", "Value": {"Fn::GetAtt": ["MyBucket", "Arn"]}, "Export": {"Name": {"Fn::Sub": "${AWS::StackName}-bucket-arn"}}}},
+        }
+
+        processor = CloudFormationTemplateProcessor(template)
+        processor.transform_cfn_tags()
+        assert processor.processed_template == expected
+
+    def test_transform_getatt_dot_notation_with_nested_attributes(self):
+        """Test that GetAtt dot notation with nested attributes is correctly transformed."""
+        # Note: The GetAtt parser already converts dot notation to array format,
+        # so we test that the array format is preserved correctly
+        yaml_content = """
+        Resources:
+          MyTable:
+            Type: AWS::DynamoDB::Table
+            Properties:
+              TableName: my-table
+          MyFunction:
+            Type: AWS::Lambda::Function
+            Properties:
+              Environment:
+                Variables:
+                  # These would be parsed from YAML as GetAttTag(["MyTable", "StreamArn"])
+                  STREAM_ARN: !GetAtt MyTable.StreamArn
+                  TABLE_ARN: !GetAtt MyTable.Arn
+        """
+        template = load_yaml(yaml_content)
+        processor = CloudFormationTemplateProcessor(template)
+        processor.transform_cfn_tags()
+
+        # Verify the transformation
+        env_vars = processor.processed_template["Resources"]["MyFunction"]["Properties"]["Environment"]["Variables"]
+        assert env_vars["STREAM_ARN"] == {"Fn::GetAtt": ["MyTable", "StreamArn"]}
+        assert env_vars["TABLE_ARN"] == {"Fn::GetAtt": ["MyTable", "Arn"]}
 
 
 class TestResourceMap:

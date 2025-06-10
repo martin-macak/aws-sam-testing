@@ -20,7 +20,7 @@ test-stacks:
 
 test-examples:
 	for example in examples/*; do \
-		uv --directory $$example run --active pytest tests/; \
+		uv --directory $$example run --active pytest -s tests/; \
 	done
 
 pyright:

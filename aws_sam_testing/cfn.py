@@ -871,3 +871,94 @@ class CloudFormationTemplateProcessor:
                     self.processed_template["Resources"].pop(resource_name)
 
         return self
+
+    def transform_cfn_tags(self) -> "CloudFormationTemplateProcessor":
+        """
+        Replaces all CloudFormation tags with their corresponding intrinsic functions.
+
+        Transforms YAML tags to JSON-style intrinsic functions:
+        - !Ref -> {"Ref": value}
+        - !GetAtt -> {"Fn::GetAtt": [logical_id, attribute]}
+        - !Sub -> {"Fn::Sub": value}
+        - !Join -> {"Fn::Join": [delimiter, values]}
+        - !Split -> {"Fn::Split": [delimiter, string]}
+        - !Select -> {"Fn::Select": [index, array]}
+        - !FindInMap -> {"Fn::FindInMap": [map_name, top_level_key, second_level_key]}
+        - !Base64 -> {"Fn::Base64": value}
+        - !Cidr -> {"Fn::Cidr": [ip_block, count, cidr_bits]}
+        - !ImportValue -> {"Fn::ImportValue": value}
+        - !GetAZs -> {"Fn::GetAZs": region}
+
+        Returns:
+            CloudFormationTemplateProcessor: Self for method chaining
+        """
+        self.processed_template = self._transform_tags_in_value(self.processed_template)
+        return self
+
+    def _transform_tags_in_value(self, value: Any) -> Any:
+        """
+        Recursively transform CloudFormation tags to intrinsic functions.
+
+        Args:
+            value: The value to transform (can be dict, list, scalar, or CloudFormation tag)
+
+        Returns:
+            The transformed value with tags replaced by intrinsic functions
+        """
+        if isinstance(value, RefTag):
+            return {"Ref": value.value}
+        elif isinstance(value, GetAttTag):
+            # GetAttTag always stores value as a list [logical_id, attribute]
+            return {"Fn::GetAtt": value.value}
+        elif isinstance(value, SubTag):
+            # SubTag stores value as a list with 1 or 2 elements
+            if len(value.value) == 1:
+                return {"Fn::Sub": value.value[0]}
+            else:
+                # Transform any tags in the variable mapping
+                transformed_mapping = self._transform_tags_in_value(value.value[1])
+                return {"Fn::Sub": [value.value[0], transformed_mapping]}
+        elif isinstance(value, JoinTag):
+            # Transform any tags in the values to join
+            delimiter = value.value[0]
+            values = self._transform_tags_in_value(value.value[1])
+            return {"Fn::Join": [delimiter, values]}
+        elif isinstance(value, SplitTag):
+            # Transform any tags in the string to split
+            delimiter = value.value[0]
+            string = self._transform_tags_in_value(value.value[1])
+            return {"Fn::Split": [delimiter, string]}
+        elif isinstance(value, SelectTag):
+            # Transform any tags in the array
+            index = value.value[0]
+            array = self._transform_tags_in_value(value.value[1])
+            return {"Fn::Select": [index, array]}
+        elif isinstance(value, FindInMapTag):
+            # Transform any tags in the parameters
+            transformed_params = [self._transform_tags_in_value(param) for param in value.value]
+            return {"Fn::FindInMap": transformed_params}
+        elif isinstance(value, Base64Tag):
+            # Transform any tags in the value to encode
+            transformed_value = self._transform_tags_in_value(value.value)
+            return {"Fn::Base64": transformed_value}
+        elif isinstance(value, CidrTag):
+            # Transform any tags in the parameters
+            transformed_params = [self._transform_tags_in_value(param) for param in value.value]
+            return {"Fn::Cidr": transformed_params}
+        elif isinstance(value, ImportValueTag):
+            # Transform any tags in the value
+            transformed_value = self._transform_tags_in_value(value.value)
+            return {"Fn::ImportValue": transformed_value}
+        elif isinstance(value, GetAZsTag):
+            # Transform any tags in the region
+            transformed_region = self._transform_tags_in_value(value.value)
+            return {"Fn::GetAZs": transformed_region}
+        elif isinstance(value, dict):
+            # Recursively transform all values in the dict
+            return {k: self._transform_tags_in_value(v) for k, v in value.items()}
+        elif isinstance(value, list):
+            # Recursively transform all items in the list
+            return [self._transform_tags_in_value(item) for item in value]
+        else:
+            # Return scalar values as-is
+            return value

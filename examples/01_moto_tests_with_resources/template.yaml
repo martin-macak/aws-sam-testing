@@ -1,6 +1,13 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 
+Globals:
+  Function:
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref MyDynamoDBTable
+        QUEUE_NAME: !Ref MySQSQueue
+
 Resources:
   MyDynamoDBTable:
     Type: AWS::DynamoDB::Table
