@@ -85,6 +85,7 @@ name = "aws-sam-testing"
 source = { editable = "." }
 dependencies = [
     { name = "aws-sam-cli" },
+    { name = "aws-sam-translator" },
 ]
 
 [package.dev-dependencies]
@@ -97,7 +98,10 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "aws-sam-cli", specifier = ">=1.139.0" }]
+requires-dist = [
+    { name = "aws-sam-cli", specifier = ">=1.139.0" },
+    { name = "aws-sam-translator", specifier = ">=1.97.0" },
+]
 
 [package.metadata.requires-dev]
 dev = [

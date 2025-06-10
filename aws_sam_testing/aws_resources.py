@@ -1,3 +1,6 @@
+import json
+from contextlib import contextmanager
+
 import boto3
 
 
@@ -61,8 +64,13 @@ class AWSResourceManager:
         tags: dict = {},
         cross_stack_resources: dict = {},
     ):
+        import uuid
+
+        from moto.cloudformation.parsing import ResourceMap
+
         self.session = session
         self.template = template
+        self.packaging_bucket_name = f"aws-mocks-sam-bucket-{uuid.uuid4()}"
         self.stack_id = stack_id
         self.stack_name = stack_name
         self.region_name = region_name
@@ -71,7 +79,12 @@ class AWSResourceManager:
         self.tags = tags
         self.cross_stack_resources = cross_stack_resources
         self.is_created = False
-        self.resource_map = None
+        self.resource_map: ResourceMap | None = None
+        self.transformed_template = _transform_template(
+            template=template,
+            packaging_bucket_name=self.packaging_bucket_name,
+            aws_account_id=self.account_id,
+        )
 
     def __enter__(self) -> "AWSResourceManager":
         """Enter the context manager and create AWS resources.
@@ -125,6 +138,45 @@ class AWSResourceManager:
         self._do_delete()
         self.is_created = False
 
+    @contextmanager
+    def set_environment(
+        self,
+        lambda_function_logical_name: str,
+        additional_environment: dict = {},
+    ):
+        import os
+
+        if self.resource_map is None:
+            raise ValueError("Resources not created")
+
+        resource_map = self.resource_map
+        resources = resource_map.resources
+        assert resources is not None
+        if lambda_function_logical_name not in resources:
+            raise ValueError(f"Lambda function {lambda_function_logical_name} not found in template")
+
+        lambda_function = resource_map[lambda_function_logical_name]
+        if lambda_function is None:
+            raise ValueError(f"Lambda function {lambda_function_logical_name} not found in template")
+
+        current_environment = os.environ.copy()
+        new_environment = {
+            **current_environment,
+            **lambda_function.environment_vars,
+            **additional_environment,
+        }
+        old_environment = current_environment.copy()
+
+        try:
+            os.environ.update(new_environment)
+            yield
+        finally:
+            # iterate over current os.environ and remove keys that are not present in old_environment
+            for key in os.environ:
+                if key not in old_environment:
+                    os.environ.pop(key)
+            os.environ.update(old_environment)
+
     def _do_create(self):
         """Internal method to perform the actual resource creation.
 
@@ -135,20 +187,55 @@ class AWSResourceManager:
         Raises:
             Exception: If moto fails to create resources or parse the template.
         """
-        from moto.cloudformation.parsing import ResourceMap as MotoResourceMap
+        from moto.cloudformation.parsing import ResourceMap
 
-        resource_map = MotoResourceMap(
+        s3 = self.session.client("s3")
+        iam = self.session.client("iam")
+
+        try:
+            iam.create_role(
+                RoleName="aws-mocks-lambda-role",
+                AssumeRolePolicyDocument=json.dumps(
+                    {
+                        "Version": "2012-10-17",
+                        "Statement": [
+                            {
+                                "Effect": "Allow",
+                                "Principal": {"Service": "lambda.amazonaws.com"},
+                                "Action": "sts:AssumeRole",
+                            }
+                        ],
+                    }
+                ),
+            )
+        except Exception as e:
+            if "EntityAlreadyExists" in str(e):
+                pass
+            else:
+                raise e
+
+        try:
+            s3.create_bucket(
+                Bucket=self.packaging_bucket_name,
+                CreateBucketConfiguration={"LocationConstraint": self.region_name},  # type: ignore
+            )
+        except Exception as e:
+            if "BucketAlreadyExists" in str(e):
+                pass
+            else:
+                raise e
+
+        resource_map = ResourceMap(
             stack_id=self.stack_id,
             stack_name=self.stack_name,
             parameters={},
             tags={},
             region_name=self.region_name,
             account_id=self.account_id,
-            template=self.template,
+            template=self.transformed_template,
             cross_stack_resources={},
         )
-        resource_map.load()
-        resource_map.create(self.template)
+        resource_map.create(self.transformed_template)
         self.resource_map = resource_map
 
     def _do_delete(self):
@@ -163,3 +250,51 @@ class AWSResourceManager:
         """
         if self.resource_map is not None:
             self.resource_map.delete()
+
+        try:
+            s3 = self.session.client("s3")
+            s3.delete_bucket(Bucket=self.packaging_bucket_name)
+        except Exception as e:
+            if "NoSuchBucket" in str(e):
+                pass
+            else:
+                raise e
+
+
+def _transform_template(
+    template: dict,
+    aws_account_id: str,
+    packaging_bucket_name: str,
+) -> dict:
+    import copy
+
+    transformed_template = copy.deepcopy(template)
+
+    globals = transformed_template.get("Globals", {})
+    global_environment_variables = globals.get("Function", {}).get("Environment", {}).get("Variables", {})
+
+    # Transform AWS::Serverless::Function to AWS::Lambda::Function
+    if "Resources" in transformed_template:
+        for resource_name, resource in transformed_template["Resources"].items():
+            if resource.get("Type") == "AWS::Serverless::Function":
+                # Change the type to Lambda Function
+                resource["Type"] = "AWS::Lambda::Function"
+
+                # Transform CodeUri to Code if present
+                if "Properties" in resource:
+                    props = resource["Properties"]
+                    if "CodeUri" in props:
+                        props.pop("CodeUri")
+                    props["Code"] = {
+                        "S3Bucket": packaging_bucket_name,
+                        "S3Key": f"package/{resource_name}.zip",
+                    }
+                    props["Role"] = f"arn:aws:iam::{aws_account_id}:role/aws-mocks-lambda-role"
+                    props["Environment"] = {
+                        "Variables": {
+                            **global_environment_variables,
+                            **props.get("Environment", {}).get("Variables", {}),
+                        },
+                    }
+
+    return transformed_template

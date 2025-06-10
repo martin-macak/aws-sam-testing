@@ -197,8 +197,8 @@ class TestAWSResourceManager:
                 # Verify bucket was created
                 buckets = s3.list_buckets()
                 assert "Buckets" in buckets
-                assert len(buckets["Buckets"]) == 1
-                bucket = buckets["Buckets"][0]
+                assert len(buckets["Buckets"]) == 2
+                bucket = buckets["Buckets"][1]
                 assert bucket.get("Name") == "test-bucket-12345"
 
                 # Verify versioning (may not be fully supported in moto)
@@ -212,7 +212,12 @@ class TestAWSResourceManager:
                     pass
 
                 # Test putting and getting objects
-                s3.put_object(Bucket="test-bucket-12345", Key="test-file.txt", Body=b"Test content", ContentType="text/plain")
+                s3.put_object(
+                    Bucket="test-bucket-12345",
+                    Key="test-file.txt",
+                    Body=b"Test content",
+                    ContentType="text/plain",
+                )
 
                 # Verify object exists
                 objects = s3.list_objects_v2(Bucket="test-bucket-12345")
@@ -226,3 +231,112 @@ class TestAWSResourceManager:
                 content = obj["Body"].read()
                 assert content == b"Test content"
                 assert obj["ContentType"] == "text/plain"
+
+    def test_modify_environment(self):
+        import os
+
+        import boto3
+        from moto import mock_aws
+
+        from aws_sam_testing.aws_resources import AWSResourceManager
+
+        template = {
+            "Globals": {
+                "Function": {
+                    "Environment": {
+                        "Variables": {
+                            "TEST_ENV_VAR_GLOBAL": {
+                                "Ref": "MyTable",
+                            },
+                        },
+                    },
+                },
+            },
+            "Resources": {
+                "MyTable": {
+                    "Type": "AWS::DynamoDB::Table",
+                    "Properties": {
+                        "TableName": "my-table",
+                        "KeySchema": [
+                            {"AttributeName": "id", "KeyType": "HASH"},
+                        ],
+                        "AttributeDefinitions": [
+                            {"AttributeName": "id", "AttributeType": "S"},
+                        ],
+                        "BillingMode": "PAY_PER_REQUEST",
+                    },
+                },
+                "MyLambda": {
+                    "Type": "AWS::Serverless::Function",
+                    "Properties": {
+                        "FunctionName": "my-lambda",
+                        "Handler": "app.lambda_handler",
+                        "Runtime": "python3.13",
+                        "Environment": {
+                            "Variables": {
+                                "TEST_ENV_VAR_FUNCTION": {
+                                    "Ref": "MyTable",
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        }
+
+        assert os.environ.get("TEST_ENV_VAR_GLOBAL") is None
+        assert os.environ.get("TEST_ENV_VAR_FUNCTION") is None
+        assert os.environ.get("TEST_ENV_VAR_ADDITIONAL") is None
+
+        with mock_aws():
+            session = boto3.Session()
+            with AWSResourceManager(
+                session=session,
+                template=template,
+            ) as resource_manager:
+                with resource_manager.set_environment(
+                    lambda_function_logical_name="MyLambda",
+                    additional_environment={
+                        "TEST_ENV_VAR_ADDITIONAL": "additional-value",
+                    },
+                ):
+                    assert os.environ.get("TEST_ENV_VAR_GLOBAL") == "my-table"
+                    assert os.environ.get("TEST_ENV_VAR_FUNCTION") == "my-table"
+                    assert os.environ.get("TEST_ENV_VAR_ADDITIONAL") == "additional-value"
+
+        assert os.environ.get("TEST_ENV_VAR_GLOBAL") is None
+        assert os.environ.get("TEST_ENV_VAR_FUNCTION") is None
+        assert os.environ.get("TEST_ENV_VAR_ADDITIONAL") is None
+
+
+def test_transform_template():
+    from aws_sam_testing.aws_resources import _transform_template
+
+    template = {
+        "Resources": {
+            "MyLambda": {
+                "Type": "AWS::Serverless::Function",
+                "Properties": {
+                    "Handler": "app.lambda_handler",
+                    "Runtime": "python3.13",
+                    "CodeUri": "./src",
+                    "Environment": {
+                        "Variables": {
+                            "BUCKET": {
+                                "Ref": "MyBucket",
+                            }
+                        }
+                    },
+                },
+            },
+        },
+    }
+
+    transformed_template = _transform_template(
+        template=template,
+        packaging_bucket_name="sam-mocks-fake",
+        aws_account_id="123456789012",
+    )
+    assert transformed_template["Resources"]["MyLambda"]["Properties"].get("CodeUri") is None
+    assert transformed_template["Resources"]["MyLambda"]["Properties"]["Code"]["S3Bucket"] == "sam-mocks-fake"
+    assert transformed_template["Resources"]["MyLambda"]["Properties"]["Code"]["S3Key"] == "package/MyLambda.zip"
