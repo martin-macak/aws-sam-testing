@@ -1,0 +1,53 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Globals:
+  Function:
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref MyDynamoDBTable
+        QUEUE_NAME: !Ref MySQSQueue
+
+Resources:
+  MyDynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: my-table
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+
+  MySQSQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: my-queue
+      VisibilityTimeout: 30
+      MessageRetentionPeriod: 300
+
+  Api:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: api
+      StageName: prod
+
+  ApiHandler:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: api-handler
+      Runtime: python3.13
+      CodeUri: api_handler/
+      Handler: app.lambda_handler
+      Layers:
+        - !Sub arn:aws:lambda:${AWS::Region}:017000801446:layer:AWSLambdaPowertoolsPythonV3-python313-arm64:7
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            Path: /
+            Method: get
+            RestApiId: !Ref Api
+

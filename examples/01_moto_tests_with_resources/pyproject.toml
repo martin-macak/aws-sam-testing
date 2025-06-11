@@ -1,0 +1,25 @@
+[project]
+name = "aws-sam-testing"
+version = "0.0.1"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "aws-sam-cli>=1.139.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.5",
+    "moto>=5.1.5",
+    "openapi-spec-validator>=0.7.1",
+    "aws-sam-testing @ file://${PROJECT_ROOT}/",
+    "aws-lambda-powertools[aws-sdk]>=3.14.0",
+    "aws-xray-sdk>=2.14.0",
+]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    'ignore:datetime\.datetime\.utcnow\(\) is deprecated:DeprecationWarning',
+    'ignore:Tried to parse AWS.*:UserWarning',
+]

@@ -15,6 +15,14 @@ build: init
 test:
 	uv run pytest tests/
 
+test-stacks:
+	uv run pytest test_stacks/
+
+test-examples:
+	for example in examples/*; do \
+		uv --directory $$example run --active pytest -s tests/; \
+	done
+
 pyright:
 	uv run pyright
 

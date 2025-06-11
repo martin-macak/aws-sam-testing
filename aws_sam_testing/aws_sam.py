@@ -138,6 +138,7 @@ class AWSSAMToolkit(CloudFormationTool):
             Path: The path to the build directory.
         """
         import os
+        import shutil
         from tempfile import TemporaryDirectory
 
         from samcli.commands.build.build_context import BuildContext
@@ -147,12 +148,12 @@ class AWSSAMToolkit(CloudFormationTool):
         elif isinstance(build_dir, str):
             build_dir = Path(build_dir)
 
+        # Remove the build directory and all its contents
+        if build_dir.exists():
+            shutil.rmtree(build_dir)
+
         if not build_dir.exists():
             build_dir.mkdir(parents=True, exist_ok=True)
-
-        # Remove all files in the build directory
-        for file in build_dir.iterdir():
-            file.unlink(missing_ok=True)
 
         # Call SAM build
         with TemporaryDirectory() as cache_dir:
@@ -238,23 +239,17 @@ class AWSSAMToolkit(CloudFormationTool):
 
             # We need to create a new template and build it so we can run the API locally
             # The file is created in the same directory as the original template so all the relative paths are correct
-            # The built template must be removed so it does not stick around after the build is done:
-            api_stack_template_path = Path(self.template_path.parent) / f"template-aws-sam-testing-{api_logical_id}.yaml"
+            api_stack_template_path = Path(self.template_path.parent) / ".aws-sam" / "templates" / "local-api" / f"template-{api_logical_id}.yaml"
             with open(api_stack_template_path, "w") as f:
                 yaml.dump(api_stack_template, f)
 
-            # Build the API stack template
-            # Also delete the template after the build is done
-            try:
-                api_stack_tool = AWSSAMToolkit(
-                    working_dir=self.working_dir,
-                    template_path=api_stack_template_path,
-                )
-                api_stack_template_path = api_stack_tool.sam_build(
-                    build_dir=Path(self.working_dir) / ".aws-sam" / "aws-sam-testing-build" / f"api-stack-{api_logical_id}",
-                )
-            finally:
-                api_stack_template_path.unlink(missing_ok=True)
+            api_stack_tool = AWSSAMToolkit(
+                working_dir=self.working_dir,
+                template_path=api_stack_template_path,
+            )
+            api_stack_template_path = api_stack_tool.sam_build(
+                build_dir=Path(self.working_dir) / ".aws-sam" / "aws-sam-testing-build" / f"api-stack-{api_logical_id}",
+            )
 
             with InvokeContext(
                 template_file=str(api_stack_template_path),
