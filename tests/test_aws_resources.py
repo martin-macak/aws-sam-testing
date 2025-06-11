@@ -1,3 +1,6 @@
+import pytest
+
+
 class TestAWSResourceManager:
     def test_simple_template(self):
         import boto3
@@ -307,6 +310,275 @@ class TestAWSResourceManager:
         assert os.environ.get("TEST_ENV_VAR_GLOBAL") is None
         assert os.environ.get("TEST_ENV_VAR_FUNCTION") is None
         assert os.environ.get("TEST_ENV_VAR_ADDITIONAL") is None
+
+    def test_get_resource_sqs_queue(self):
+        """Test get_resource method for SQS Queue using ResourceManager."""
+        import boto3
+        from moto import mock_aws
+
+        from aws_sam_testing.pytest.aws_resources import ResourceManager
+
+        template = {
+            "Resources": {
+                "TestQueue": {
+                    "Type": "AWS::SQS::Queue",
+                    "Properties": {
+                        "QueueName": "test-get-resource-queue",
+                    },
+                },
+            },
+        }
+
+        with mock_aws():
+            session = boto3.Session()
+            with ResourceManager(
+                session=session,
+                working_dir=None,
+                template=template,
+            ) as manager:
+                # Get the queue using get_resource
+                queue = manager.get_resource("TestQueue")
+
+                # Verify it's a Queue resource
+                assert hasattr(queue, "send_message")
+                assert hasattr(queue, "receive_messages")
+
+                # Test that we can use the queue
+                queue.send_message(MessageBody="Test message")
+                messages = list(queue.receive_messages())
+                assert len(messages) == 1
+                assert messages[0].body == "Test message"
+
+    def test_get_resource_dynamodb_table(self):
+        """Test get_resource method for DynamoDB Table using ResourceManager."""
+        import boto3
+        from moto import mock_aws
+
+        from aws_sam_testing.pytest.aws_resources import ResourceManager
+
+        template = {
+            "Resources": {
+                "TestTable": {
+                    "Type": "AWS::DynamoDB::Table",
+                    "Properties": {
+                        "TableName": "test-get-resource-table",
+                        "KeySchema": [
+                            {"AttributeName": "id", "KeyType": "HASH"},
+                        ],
+                        "AttributeDefinitions": [
+                            {"AttributeName": "id", "AttributeType": "S"},
+                        ],
+                        "BillingMode": "PAY_PER_REQUEST",
+                    },
+                },
+            },
+        }
+
+        with mock_aws():
+            session = boto3.Session()
+            with ResourceManager(
+                session=session,
+                working_dir=None,
+                template=template,
+            ) as manager:
+                # Get the table using get_resource
+                table = manager.get_resource("TestTable")
+
+                # Verify it's a Table resource
+                assert hasattr(table, "put_item")
+                assert hasattr(table, "get_item")
+                assert table.table_status == "ACTIVE"
+
+                # Test that we can use the table
+                table.put_item(Item={"id": "test-id", "data": "test-data"})
+                response = table.get_item(Key={"id": "test-id"})
+                assert response["Item"]["data"] == "test-data"
+
+    def test_get_resource_s3_bucket(self):
+        """Test get_resource method for S3 Bucket using ResourceManager."""
+        import boto3
+        from moto import mock_aws
+
+        from aws_sam_testing.pytest.aws_resources import ResourceManager
+
+        template = {
+            "Resources": {
+                "TestBucket": {
+                    "Type": "AWS::S3::Bucket",
+                    "Properties": {
+                        "BucketName": "test-get-resource-bucket-unique",
+                    },
+                },
+            },
+        }
+
+        with mock_aws():
+            session = boto3.Session()
+            with ResourceManager(
+                session=session,
+                working_dir=None,
+                template=template,
+            ) as manager:
+                # Get the bucket using get_resource
+                bucket = manager.get_resource("TestBucket")
+
+                # Verify it's a Bucket resource
+                assert hasattr(bucket, "put_object")
+                assert hasattr(bucket, "objects")
+
+                # Test that we can use the bucket
+                bucket.put_object(Key="test-file.txt", Body=b"Test content")
+                objects = list(bucket.objects.all())
+                assert len(objects) == 1
+                assert objects[0].key == "test-file.txt"
+
+    @pytest.mark.parametrize(
+        "resource_name,resource_type,template",
+        [
+            (
+                "MyQueue",
+                "AWS::SQS::Queue",
+                {
+                    "Resources": {
+                        "MyQueue": {
+                            "Type": "AWS::SQS::Queue",
+                            "Properties": {
+                                "QueueName": "param-test-queue",
+                            },
+                        },
+                    },
+                },
+            ),
+            (
+                "MyTable",
+                "AWS::DynamoDB::Table",
+                {
+                    "Resources": {
+                        "MyTable": {
+                            "Type": "AWS::DynamoDB::Table",
+                            "Properties": {
+                                "TableName": "param-test-table",
+                                "KeySchema": [
+                                    {"AttributeName": "id", "KeyType": "HASH"},
+                                ],
+                                "AttributeDefinitions": [
+                                    {"AttributeName": "id", "AttributeType": "S"},
+                                ],
+                                "BillingMode": "PAY_PER_REQUEST",
+                            },
+                        },
+                    },
+                },
+            ),
+            (
+                "MyBucket",
+                "AWS::S3::Bucket",
+                {
+                    "Resources": {
+                        "MyBucket": {
+                            "Type": "AWS::S3::Bucket",
+                            "Properties": {
+                                "BucketName": "param-test-bucket-unique",
+                            },
+                        },
+                    },
+                },
+            ),
+        ],
+    )
+    def test_get_resource_parametrized(self, resource_name, resource_type, template):
+        """Parametrized test for get_resource method with different resource types."""
+        import boto3
+        from moto import mock_aws
+
+        from aws_sam_testing.pytest.aws_resources import ResourceManager
+
+        with mock_aws():
+            session = boto3.Session()
+            with ResourceManager(
+                session=session,
+                working_dir=None,
+                template=template,
+            ) as manager:
+                # Get the resource
+                resource = manager.get_resource(resource_name)
+
+                # Verify the resource is returned and is not None
+                assert resource is not None
+
+                # Basic verification based on resource type
+                if resource_type == "AWS::SQS::Queue":
+                    assert hasattr(resource, "send_message")
+                    assert hasattr(resource, "receive_messages")
+                elif resource_type == "AWS::DynamoDB::Table":
+                    assert hasattr(resource, "put_item")
+                    assert hasattr(resource, "get_item")
+                elif resource_type == "AWS::S3::Bucket":
+                    assert hasattr(resource, "put_object")
+                    assert hasattr(resource, "objects")
+
+    def test_get_resource_unsupported_type(self):
+        """Test get_resource method with unsupported resource type."""
+        import boto3
+        import pytest
+        from moto import mock_aws
+
+        from aws_sam_testing.pytest.aws_resources import ResourceManager
+
+        template = {
+            "Resources": {
+                "UnsupportedResource": {
+                    "Type": "AWS::SNS::Topic",
+                    "Properties": {
+                        "TopicName": "test-unsupported-topic",
+                    },
+                },
+            },
+        }
+
+        with mock_aws():
+            session = boto3.Session()
+            with ResourceManager(
+                session=session,
+                working_dir=None,
+                template=template,
+            ) as manager:
+                # Attempt to get unsupported resource type
+                with pytest.raises(ValueError, match="Unsupported resource type"):
+                    manager.get_resource("UnsupportedResource")
+
+    def test_get_resource_non_existent(self):
+        """Test get_resource method with non-existent resource name."""
+        import boto3
+        import pytest
+        from moto import mock_aws
+
+        from aws_sam_testing.pytest.aws_resources import ResourceManager
+
+        template = {
+            "Resources": {
+                "ExistingResource": {
+                    "Type": "AWS::SQS::Queue",
+                    "Properties": {
+                        "QueueName": "existing-queue",
+                    },
+                },
+            },
+        }
+
+        with mock_aws():
+            session = boto3.Session()
+            with ResourceManager(
+                session=session,
+                working_dir=None,
+                template=template,
+            ) as manager:
+                # Attempt to get non-existent resource
+                with pytest.raises(
+                    ValueError,
+                    match="Resource NonExistentResource not found in template",
+                ):
+                    manager.get_resource("NonExistentResource")
 
 
 def test_transform_template():

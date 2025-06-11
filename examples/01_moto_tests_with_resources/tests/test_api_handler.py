@@ -29,9 +29,6 @@ def test_route_put_item(
     mock_aws_lambda_context,
     mock_aws_resources,
 ):
-    import os
-
-    import boto3
     from api_handler.app import lambda_handler
 
     with mock_aws_resources.set_environment(lambda_function_logical_name="ApiHandler"):
@@ -49,15 +46,13 @@ def test_route_put_item(
 
         assert got["statusCode"] == 200
 
-        sqs = boto3.resource("sqs")
-        queue = sqs.Queue(os.environ["QUEUE_NAME"])
+        queue = mock_aws_resources.get_resource("MySQSQueue")
         messages = queue.receive_messages()
         assert len(messages) == 1
         message = messages[0]
         assert message.body == "Hello, World!"
 
-        dynamodb = boto3.resource("dynamodb")
-        table = dynamodb.Table(os.environ["TABLE_NAME"])
+        table = mock_aws_resources.get_resource("MyDynamoDBTable")
         items = table.scan()["Items"]
         assert len(items) == 1
         item = items[0]

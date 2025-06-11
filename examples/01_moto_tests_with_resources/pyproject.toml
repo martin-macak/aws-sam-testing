@@ -17,3 +17,9 @@ dev = [
     "aws-lambda-powertools[aws-sdk]>=3.14.0",
     "aws-xray-sdk>=2.14.0",
 ]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    'ignore:datetime\.datetime\.utcnow\(\) is deprecated:DeprecationWarning',
+    'ignore:Tried to parse AWS.*:UserWarning',
+]

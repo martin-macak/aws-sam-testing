@@ -177,6 +177,17 @@ class AWSResourceManager:
                     os.environ.pop(key)
             os.environ.update(old_environment)
 
+    def get_cfn_resource_by_name(self, resource_name: str):
+        if self.resource_map is None:
+            raise ValueError("Resources not created")
+
+        resource_map = self.resource_map
+
+        if resource_name not in resource_map.resources:
+            raise ValueError(f"Resource {resource_name} not found in template")
+
+        return resource_map[resource_name]
+
     def _do_create(self):
         """Internal method to perform the actual resource creation.
 
