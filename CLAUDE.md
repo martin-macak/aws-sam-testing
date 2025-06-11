@@ -38,17 +38,21 @@ uv build    # Direct build command
 ### Testing
 ```bash
 make test       # Run all tests
+make test-stacks  # Run test stacks
+make test-examples  # Run example tests
 uv run pytest tests/  # Direct pytest command
 uv run pytest tests/test_specific.py  # Run specific test file
 uv run pytest -k "test_name"  # Run specific test by name
+uv run pytest -m "not slow"  # Skip slow tests
 ```
 
 ### Code Quality
 ```bash
-make format     # Format code with ruff
+make format     # Format code with ruff (includes check --fix and format)
 make pyright    # Run type checking
-uv run ruff format  # Direct format command
-uv run pyright      # Direct type check command
+uv run ruff check --fix  # Fix auto-fixable issues
+uv run ruff format       # Format code
+uv run pyright           # Direct type check command
 ```
 
 ### Publishing
