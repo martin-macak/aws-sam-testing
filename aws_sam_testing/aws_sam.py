@@ -12,7 +12,7 @@ from typing import Any, Dict, Generator, Optional, Union
 
 from samcli.commands.local.cli_common.invoke_context import InvokeContext
 
-from aws_sam_testing.cfn import CloudFormationTemplateProcessor
+from aws_sam_testing.cfn import CloudFormationTemplateProcessor, RefTag
 from aws_sam_testing.core import CloudFormationTool
 
 logger = logging.getLogger(__name__)
@@ -89,6 +89,9 @@ class LocalApi:
 
             self.port = find_free_port()
 
+        if self.host is None:
+            self.host = "127.0.0.1"
+
         self.is_running = True
 
     def stop(self) -> None:
@@ -96,6 +99,14 @@ class LocalApi:
             return
 
         self.is_running = False
+
+    @property
+    def url(self) -> str:
+        """Return the URL of the running API."""
+        if not self.is_running:
+            raise RuntimeError("API is not running")
+        host = self.host or "127.0.0.1"
+        return f"http://{host}:{self.port}"
 
 
 class AWSSAMToolkit(CloudFormationTool):
@@ -216,8 +227,9 @@ class AWSSAMToolkit(CloudFormationTool):
         """
         from contextlib import ExitStack
 
-        import yaml
         from samcli.commands.local.cli_common.invoke_context import InvokeContext
+
+        from aws_sam_testing.cfn import dump_yaml
 
         # Validate parameters
         if port is not None and (port < 1 or port > 65535):
@@ -245,9 +257,31 @@ class AWSSAMToolkit(CloudFormationTool):
             # safely execute only stacks with a single API resource.
             apis_to_remove = [api for api in apis if api[0] != api_logical_id]
             api_stack_cfn_processor = CloudFormationTemplateProcessor(self.template)
+
             if apis_to_remove:
+                # First, remove all other API resources
                 for api in apis_to_remove:
                     api_stack_cfn_processor.remove_resource(api[0])
+
+                # Now find and remove functions that have events referencing the removed APIs
+                removed_api_ids = {api[0] for api in apis_to_remove}
+                functions = api_stack_cfn_processor.find_resources_by_type("AWS::Serverless::Function")
+
+                for func_id, func_data in functions:
+                    events = func_data.get("Properties", {}).get("Events", {})
+                    for event_name, event_data in events.items():
+                        if event_data.get("Type") == "Api":
+                            rest_api_ref = event_data.get("Properties", {}).get("RestApiId")
+                            # Check if this event references a removed API
+                            if isinstance(rest_api_ref, dict) and rest_api_ref.get("Ref") in removed_api_ids:
+                                # Remove the entire function since it depends on a removed API
+                                api_stack_cfn_processor.remove_resource(func_id)
+                                break
+                            elif isinstance(rest_api_ref, RefTag) and rest_api_ref.value in removed_api_ids:
+                                # Handle RefTag instances
+                                api_stack_cfn_processor.remove_resource(func_id)
+                                break
+
                 api_stack_template = api_stack_cfn_processor.processed_template.copy()
             else:
                 api_stack_template = api_stack_cfn_processor.processed_template.copy()
@@ -262,11 +296,11 @@ class AWSSAMToolkit(CloudFormationTool):
             # Create the debug directory and the template file
             api_stack_template_debug_path.parent.mkdir(parents=True, exist_ok=True)
             with open(api_stack_template_debug_path, "w") as f:
-                yaml.dump(api_stack_template, f)
+                dump_yaml(api_stack_template, f)
 
             try:
                 with open(api_stack_template_path, "w") as f:
-                    yaml.dump(api_stack_template, f)
+                    dump_yaml(api_stack_template, f)
 
                 api_stack_tool = AWSSAMToolkit(
                     working_dir=self.working_dir,
@@ -274,12 +308,12 @@ class AWSSAMToolkit(CloudFormationTool):
                 )
 
                 # Build the stack for the API template.
-                api_stack_template_path = api_stack_tool.sam_build(
+                api_stack_build_dir = api_stack_tool.sam_build(
                     build_dir=Path(self.working_dir) / ".aws-sam" / "aws-sam-testing-build" / f"api-stack-{api_logical_id}",
                 )
 
                 invoke_ctx = InvokeContext(
-                    template_file=str(api_stack_template_path),
+                    template_file=str(api_stack_build_dir / "template.yaml"),
                     function_identifier=None,
                     env_vars_file=None,
                     docker_volume_basedir=None,

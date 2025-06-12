@@ -84,6 +84,12 @@ def lambda_handler(event, context):
             print("\nBuild directory structure:")
             TestAWSSAMToolkit.print_directory_tree(build_dir)
 
+            # Print the built template
+            built_template_path = build_dir / "template.yaml"
+            if built_template_path.exists():
+                print("\nBuilt template.yaml:")
+                print(built_template_path.read_text())
+
             # Verify build output
             assert build_dir.exists()
             assert build_dir.is_dir()
@@ -129,6 +135,12 @@ def handler(event, context):
             # Print build directory structure
             print("\nBuild directory structure:")
             TestAWSSAMToolkit.print_directory_tree(build_dir)
+
+            # Print the built template
+            built_template_path = build_dir / "template.yaml"
+            if built_template_path.exists():
+                print("\nBuilt template.yaml:")
+                print(built_template_path.read_text())
 
             # Verify build output
             assert build_dir == custom_build_dir
@@ -191,8 +203,516 @@ Resources:
             print("\nBuild directory structure:")
             TestAWSSAMToolkit.print_directory_tree(build_dir)
 
+            # Print the built template
+            built_template_path = build_dir / "template.yaml"
+            if built_template_path.exists():
+                print("\nBuilt template.yaml:")
+                print(built_template_path.read_text())
+
             # Verify build output exists even though source was missing
             assert build_dir.exists()
             assert (build_dir / "template.yaml").exists()
             # The function directory might not exist or be empty due to missing source
             # This is expected behavior from SAM CLI
+
+    class TestRunLocalApi:
+        """Test cases for run_local_api method."""
+
+        def test_run_local_api_no_api(self, tmp_path: Path):
+            """Test run_local_api when template has no API resources."""
+            # Create a template without any API resources
+            template_content = """
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Resources:
+  MyFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: app.handler
+      Runtime: python3.13
+"""
+
+            # Create template file
+            template_path = tmp_path / "template.yaml"
+            template_path.write_text(template_content)
+
+            # Create source directory and handler file
+            src_dir = tmp_path / "src"
+            src_dir.mkdir()
+            handler_file = src_dir / "app.py"
+            handler_file.write_text("""
+def handler(event, context):
+    return {'statusCode': 200, 'body': 'Hello World'}
+""")
+
+            # Initialize toolkit
+            toolkit = AWSSAMToolkit(working_dir=str(tmp_path), template_path=str(template_path))
+
+            # Should raise ValueError when no API resources found
+            with pytest.raises(ValueError, match="No API resources found in template"):
+                with toolkit.run_local_api():
+                    pass
+
+        def test_run_local_api_single_api(self, tmp_path: Path):
+            """Test run_local_api with a single API resource."""
+            # Create a template with one API resource
+            template_content = """
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Resources:
+  MyApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: dev
+      Cors:
+        AllowMethods: "'*'"
+        AllowHeaders: "'*'"
+        AllowOrigin: "'*'"
+  
+  HelloFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: app.handler
+      Runtime: python3.13
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MyApi
+            Path: /hello
+            Method: get
+"""
+
+            # Create template file
+            template_path = tmp_path / "template.yaml"
+            template_path.write_text(template_content)
+
+            # Create source directory and handler file
+            src_dir = tmp_path / "src"
+            src_dir.mkdir()
+            handler_file = src_dir / "app.py"
+            handler_file.write_text("""
+def handler(event, context):
+    return {
+        'statusCode': 200,
+        'body': 'Hello from single API!'
+    }
+""")
+
+            # Initialize toolkit
+            toolkit = AWSSAMToolkit(working_dir=str(tmp_path), template_path=str(template_path))
+
+            # Build the stack first
+            build_dir = toolkit.sam_build()
+
+            # Print build directory structure
+            print("\nBuild directory structure for single API test:")
+            TestAWSSAMToolkit.print_directory_tree(build_dir)
+
+            # Print the built template
+            built_template_path = build_dir / "template.yaml"
+            if built_template_path.exists():
+                print("\nBuilt template.yaml:")
+                print(built_template_path.read_text())
+
+            # Run local API
+            with toolkit.run_local_api() as apis:
+                # Should have exactly one API
+                assert len(apis) == 1
+                api = apis[0]
+
+                # Check API properties
+                assert api.api_logical_id == "MyApi"
+                assert api.port is not None
+                assert api.host is not None
+                assert api.url is not None
+                assert api.url.startswith("http://")
+
+                # Print API details for debugging
+                print(f"\nSingle API running at: {api.url}")
+                print(f"API Logical ID: {api.api_logical_id}")
+                print(f"Port: {api.port}")
+                print(f"Host: {api.host}")
+
+        def test_run_local_api_multiple_apis(self, tmp_path: Path):
+            """Test run_local_api with multiple API resources."""
+            # Create a template with multiple API resources
+            template_content = """
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Resources:
+  PublicApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: prod
+      Cors:
+        AllowMethods: "'*'"
+        AllowHeaders: "'*'"
+        AllowOrigin: "'*'"
+  
+  InternalApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: internal
+      EndpointConfiguration:
+        Type: PRIVATE
+  
+  AdminApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: admin
+      Auth:
+        ApiKeyRequired: true
+  
+  PublicFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: public.handler
+      Runtime: python3.13
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PublicApi
+            Path: /public
+            Method: get
+  
+  InternalFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: internal.handler
+      Runtime: python3.13
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref InternalApi
+            Path: /internal
+            Method: get
+  
+  AdminFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: admin.handler
+      Runtime: python3.13
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AdminApi
+            Path: /admin
+            Method: get
+"""
+
+            # Create template file
+            template_path = tmp_path / "template.yaml"
+            template_path.write_text(template_content)
+
+            # Create source directory and handler files
+            src_dir = tmp_path / "src"
+            src_dir.mkdir()
+
+            # Public handler
+            public_handler = src_dir / "public.py"
+            public_handler.write_text("""
+def handler(event, context):
+    return {
+        'statusCode': 200,
+        'body': 'Public API response'
+    }
+""")
+
+            # Internal handler
+            internal_handler = src_dir / "internal.py"
+            internal_handler.write_text("""
+def handler(event, context):
+    return {
+        'statusCode': 200,
+        'body': 'Internal API response'
+    }
+""")
+
+            # Admin handler
+            admin_handler = src_dir / "admin.py"
+            admin_handler.write_text("""
+def handler(event, context):
+    return {
+        'statusCode': 200,
+        'body': 'Admin API response'
+    }
+""")
+
+            # Initialize toolkit
+            toolkit = AWSSAMToolkit(working_dir=str(tmp_path), template_path=str(template_path))
+
+            # Build the stack first
+            build_dir = toolkit.sam_build()
+
+            # Print build directory structure
+            print("\nBuild directory structure for multiple APIs test:")
+            TestAWSSAMToolkit.print_directory_tree(build_dir)
+
+            # Print the built template
+            built_template_path = build_dir / "template.yaml"
+            if built_template_path.exists():
+                print("\nBuilt template.yaml:")
+                print(built_template_path.read_text())
+
+            # Run local APIs
+            with toolkit.run_local_api() as apis:
+                # Should have exactly three APIs
+                assert len(apis) == 3
+
+                # Check that we have all expected APIs
+                api_ids = {api.api_logical_id for api in apis}
+                assert api_ids == {"PublicApi", "InternalApi", "AdminApi"}
+
+                # Check that each API has unique port
+                ports = [api.port for api in apis]
+                assert len(ports) == len(set(ports)), "Each API should have a unique port"
+
+                # Print API details for debugging
+                print("\nMultiple APIs running:")
+                for api in apis:
+                    print(f"- {api.api_logical_id} at {api.url} (port: {api.port})")
+
+                # Verify each API is properly configured
+                for api in apis:
+                    assert api.port is not None
+                    assert api.host is not None
+                    assert api.url is not None
+                    assert api.url.startswith("http://")
+
+                    # Print intermediate build directories for each API
+                    api_build_dir = Path(tmp_path) / ".aws-sam" / "aws-sam-testing-build" / f"api-stack-{api.api_logical_id}"
+                    if api_build_dir.exists():
+                        print(f"\nBuild directory for {api.api_logical_id}:")
+                        TestAWSSAMToolkit.print_directory_tree(api_build_dir)
+
+                        # Print the API-specific template
+                        api_template_path = api_build_dir / "template.yaml"
+                        if api_template_path.exists():
+                            print(f"\nTemplate for {api.api_logical_id}:")
+                            print(api_template_path.read_text())
+
+        def test_run_local_api_with_parameters(self, tmp_path: Path):
+            """Test run_local_api with CloudFormation parameters."""
+            # Create a template with parameters
+            template_content = """
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Parameters:
+  StageName:
+    Type: String
+    Default: dev
+  
+  ApiName:
+    Type: String
+    Default: MyAPI
+
+Resources:
+  ParameterizedApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: !Ref StageName
+      Name: !Ref ApiName
+  
+  TestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: app.handler
+      Runtime: python3.13
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ParameterizedApi
+            Path: /test
+            Method: get
+"""
+
+            # Create template file
+            template_path = tmp_path / "template.yaml"
+            template_path.write_text(template_content)
+
+            # Create source directory and handler file
+            src_dir = tmp_path / "src"
+            src_dir.mkdir()
+            handler_file = src_dir / "app.py"
+            handler_file.write_text("""
+def handler(event, context):
+    return {
+        'statusCode': 200,
+        'body': 'Parameterized API response'
+    }
+""")
+
+            # Initialize toolkit
+            toolkit = AWSSAMToolkit(working_dir=str(tmp_path), template_path=str(template_path))
+
+            # Build the stack first
+            build_dir = toolkit.sam_build()
+
+            # Print build directory structure
+            print("\nBuild directory structure for parameterized API test:")
+            TestAWSSAMToolkit.print_directory_tree(build_dir)
+
+            # Print the built template
+            built_template_path = build_dir / "template.yaml"
+            if built_template_path.exists():
+                print("\nBuilt template.yaml:")
+                print(built_template_path.read_text())
+
+            # Run local API with parameters
+            parameters = {"StageName": "production", "ApiName": "ProductionAPI"}
+
+            with toolkit.run_local_api(parameters=parameters) as apis:
+                # Should have exactly one API
+                assert len(apis) == 1
+                api = apis[0]
+
+                # Check API properties
+                assert api.api_logical_id == "ParameterizedApi"
+                assert api.parameters == parameters
+
+                # Print API details for debugging
+                print(f"\nParameterized API running at: {api.url}")
+                print(f"Parameters: {api.parameters}")
+
+        def test_run_local_api_custom_port_host(self, tmp_path: Path):
+            """Test run_local_api with custom port and host."""
+            # Create a simple template with one API
+            template_content = """
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Resources:
+  CustomApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: test
+  
+  TestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: app.handler
+      Runtime: python3.13
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CustomApi
+            Path: /test
+            Method: get
+"""
+
+            # Create template file
+            template_path = tmp_path / "template.yaml"
+            template_path.write_text(template_content)
+
+            # Create source directory and handler file
+            src_dir = tmp_path / "src"
+            src_dir.mkdir()
+            handler_file = src_dir / "app.py"
+            handler_file.write_text("""
+def handler(event, context):
+    return {'statusCode': 200, 'body': 'Custom port/host API'}
+""")
+
+            # Initialize toolkit
+            toolkit = AWSSAMToolkit(working_dir=str(tmp_path), template_path=str(template_path))
+
+            # Build the stack first
+            toolkit.sam_build()
+
+            # Test with custom port and host
+            custom_port = 8080
+            custom_host = "127.0.0.1"
+
+            with toolkit.run_local_api(port=custom_port, host=custom_host) as apis:
+                # Should have exactly one API
+                assert len(apis) == 1
+                api = apis[0]
+
+                # Check that custom port and host are used
+                assert api.port == custom_port
+                assert api.host == custom_host
+                assert f"{custom_host}:{custom_port}" in api.url
+
+                # Print API details for debugging
+                print(f"\nCustom API running at: {api.url}")
+                print(f"Custom Port: {api.port}")
+                print(f"Custom Host: {api.host}")
+
+        def test_run_local_api_invalid_port(self, tmp_path: Path):
+            """Test run_local_api with invalid port values."""
+            # Create a minimal template
+            template_content = """
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Resources:
+  TestApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: test
+"""
+
+            # Create template file
+            template_path = tmp_path / "template.yaml"
+            template_path.write_text(template_content)
+
+            # Initialize toolkit
+            toolkit = AWSSAMToolkit(working_dir=str(tmp_path), template_path=str(template_path))
+
+            # Test with port < 1
+            with pytest.raises(ValueError, match="Port must be between 1 and 65535"):
+                with toolkit.run_local_api(port=0):
+                    pass
+
+            # Test with port > 65535
+            with pytest.raises(ValueError, match="Port must be between 1 and 65535"):
+                with toolkit.run_local_api(port=70000):
+                    pass
+
+        def test_run_local_api_empty_host(self, tmp_path: Path):
+            """Test run_local_api with empty host string."""
+            # Create a minimal template
+            template_content = """
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Resources:
+  TestApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: test
+"""
+
+            # Create template file
+            template_path = tmp_path / "template.yaml"
+            template_path.write_text(template_content)
+
+            # Initialize toolkit
+            toolkit = AWSSAMToolkit(working_dir=str(tmp_path), template_path=str(template_path))
+
+            # Test with empty host
+            with pytest.raises(ValueError, match="Host cannot be empty"):
+                with toolkit.run_local_api(host=""):
+                    pass
+
+            # Test with whitespace-only host
+            with pytest.raises(ValueError, match="Host cannot be empty"):
+                with toolkit.run_local_api(host="   "):
+                    pass

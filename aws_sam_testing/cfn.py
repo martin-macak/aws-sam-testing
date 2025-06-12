@@ -380,6 +380,97 @@ def load_yaml_file(file_path: str) -> Dict[str, Any]:
         return yaml.load(f, Loader=CloudFormationLoader)
 
 
+class CloudFormationDumper(yaml.SafeDumper):
+    """Custom YAML dumper that supports CloudFormation tags."""
+
+    pass
+
+
+def represent_ref(dumper: "CloudFormationDumper", data: RefTag) -> yaml.Node:
+    """Represent !Ref tag."""
+    return dumper.represent_scalar("!Ref", data.value)
+
+
+def represent_get_att(dumper: "CloudFormationDumper", data: GetAttTag) -> yaml.Node:
+    """Represent !GetAtt tag."""
+    return dumper.represent_scalar("!GetAtt", data.value)
+
+
+def represent_sub(dumper: "CloudFormationDumper", data: SubTag) -> yaml.Node:
+    """Represent !Sub tag."""
+    if isinstance(data.value, list):
+        return dumper.represent_sequence("!Sub", data.value)
+    return dumper.represent_scalar("!Sub", data.value)
+
+
+def represent_join(dumper: "CloudFormationDumper", data: JoinTag) -> yaml.Node:
+    """Represent !Join tag."""
+    return dumper.represent_sequence("!Join", data.value)
+
+
+def represent_split(dumper: "CloudFormationDumper", data: SplitTag) -> yaml.Node:
+    """Represent !Split tag."""
+    return dumper.represent_sequence("!Split", data.value)
+
+
+def represent_select(dumper: "CloudFormationDumper", data: SelectTag) -> yaml.Node:
+    """Represent !Select tag."""
+    return dumper.represent_sequence("!Select", data.value)
+
+
+def represent_find_in_map(dumper: "CloudFormationDumper", data: FindInMapTag) -> yaml.Node:
+    """Represent !FindInMap tag."""
+    return dumper.represent_sequence("!FindInMap", data.value)
+
+
+def represent_base64(dumper: "CloudFormationDumper", data: Base64Tag) -> yaml.Node:
+    """Represent !Base64 tag."""
+    return dumper.represent_scalar("!Base64", data.value)
+
+
+def represent_cidr(dumper: "CloudFormationDumper", data: CidrTag) -> yaml.Node:
+    """Represent !Cidr tag."""
+    return dumper.represent_sequence("!Cidr", data.value)
+
+
+def represent_import_value(dumper: "CloudFormationDumper", data: ImportValueTag) -> yaml.Node:
+    """Represent !ImportValue tag."""
+    return dumper.represent_scalar("!ImportValue", data.value)
+
+
+def represent_get_azs(dumper: "CloudFormationDumper", data: GetAZsTag) -> yaml.Node:
+    """Represent !GetAZs tag."""
+    return dumper.represent_scalar("!GetAZs", data.value)
+
+
+# Register CloudFormation tag representers
+CloudFormationDumper.add_representer(RefTag, represent_ref)
+CloudFormationDumper.add_representer(GetAttTag, represent_get_att)
+CloudFormationDumper.add_representer(SubTag, represent_sub)
+CloudFormationDumper.add_representer(JoinTag, represent_join)
+CloudFormationDumper.add_representer(SplitTag, represent_split)
+CloudFormationDumper.add_representer(SelectTag, represent_select)
+CloudFormationDumper.add_representer(FindInMapTag, represent_find_in_map)
+CloudFormationDumper.add_representer(Base64Tag, represent_base64)
+CloudFormationDumper.add_representer(CidrTag, represent_cidr)
+CloudFormationDumper.add_representer(ImportValueTag, represent_import_value)
+CloudFormationDumper.add_representer(GetAZsTag, represent_get_azs)
+
+
+def dump_yaml(data: Dict[str, Any], stream=None) -> Optional[str]:
+    """
+    Dump YAML content with CloudFormation tag support.
+
+    Args:
+        data: Dictionary to dump as YAML
+        stream: Optional file-like object to write to
+
+    Returns:
+        YAML string if stream is None, otherwise None
+    """
+    return yaml.dump(data, stream=stream, Dumper=CloudFormationDumper, default_flow_style=False, sort_keys=False)
+
+
 class CloudFormationTemplateProcessor:
     """Processor for CloudFormation templates that handles resource manipulation and dependency management."""
 
