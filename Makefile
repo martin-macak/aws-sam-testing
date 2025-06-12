@@ -13,10 +13,10 @@ build: init
 
 # Run tests
 test:
-	uv run pytest tests/
+	uv run pytest -s tests/
 
 test-stacks:
-	uv run pytest test_stacks/
+	uv run pytest -s test_stacks/
 
 test-examples:
 	for example in examples/*; do \

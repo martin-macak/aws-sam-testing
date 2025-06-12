@@ -30,14 +30,3 @@ Resources:
             RestApiId: !Ref MyApi
             Path: /hello
             Method: get
-
-Outputs:
-  HelloWorldApi:
-    Description: API Gateway endpoint URL for Hello World function
-    Value: !Sub "https://${MyApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/hello/"
-  HelloWorldFunction:
-    Description: Hello World Lambda Function ARN
-    Value: !GetAtt HelloWorldFunction.Arn
-  HelloWorldFunctionIamRole:
-    Description: Implicit IAM Role created for Hello World function
-    Value: !GetAtt HelloWorldFunctionRole.Arn

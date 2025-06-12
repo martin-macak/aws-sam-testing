@@ -339,12 +339,15 @@ class AWSSAMToolkit(CloudFormationTool):
                     build_dir=Path(self.working_dir) / ".aws-sam" / "aws-sam-testing-build" / f"api-stack-{api_logical_id}",
                 )
 
+                log_file = Path(self.working_dir) / ".aws-sam" / "aws-sam-testing-build" / f"api-stack-{api_logical_id}" / "log.txt"
+
                 invoke_ctx = InvokeContext(
                     template_file=str(api_stack_build_dir / "template.yaml"),
                     function_identifier=None,
                     env_vars_file=None,
                     docker_volume_basedir=None,
                     docker_network=None,
+                    log_file=str(log_file),
                 )
 
                 # Run the API locally.
