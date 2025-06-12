@@ -46,7 +46,7 @@ def test_run_local_api():
             assert api.host is not None
 
             # Try to connect to the API in a loop with max 10 retries
-            max_retries = 10
+            max_retries = 20
             retry_count = 0
             connected = False
 
@@ -72,8 +72,8 @@ def test_run_local_api():
 
             response = requests.get(f"http://{api.host}:{api.port}/hello")
             assert response is not None
-            # assert response.status_code == 200
-            # assert response.json() == {"message": "Hello, World!"}
+            assert response.status_code == 200
+            assert response.json() == {"message": "Hello World!"}
 
             for api in apis:
                 api.stop()

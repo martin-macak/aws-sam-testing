@@ -316,7 +316,7 @@ class TestAWSResourceManager:
         import boto3
         from moto import mock_aws
 
-        from aws_sam_testing.pytest.aws_resources import ResourceManager
+        from aws_sam_testing.pytest_addin.aws_resources import ResourceManager
 
         template = {
             "Resources": {
@@ -354,7 +354,7 @@ class TestAWSResourceManager:
         import boto3
         from moto import mock_aws
 
-        from aws_sam_testing.pytest.aws_resources import ResourceManager
+        from aws_sam_testing.pytest_addin.aws_resources import ResourceManager
 
         template = {
             "Resources": {
@@ -399,7 +399,7 @@ class TestAWSResourceManager:
         import boto3
         from moto import mock_aws
 
-        from aws_sam_testing.pytest.aws_resources import ResourceManager
+        from aws_sam_testing.pytest_addin.aws_resources import ResourceManager
 
         template = {
             "Resources": {
@@ -491,7 +491,7 @@ class TestAWSResourceManager:
         import boto3
         from moto import mock_aws
 
-        from aws_sam_testing.pytest.aws_resources import ResourceManager
+        from aws_sam_testing.pytest_addin.aws_resources import ResourceManager
 
         with mock_aws():
             session = boto3.Session()
@@ -523,7 +523,7 @@ class TestAWSResourceManager:
         import pytest
         from moto import mock_aws
 
-        from aws_sam_testing.pytest.aws_resources import ResourceManager
+        from aws_sam_testing.pytest_addin.aws_resources import ResourceManager
 
         template = {
             "Resources": {
@@ -553,7 +553,7 @@ class TestAWSResourceManager:
         import pytest
         from moto import mock_aws
 
-        from aws_sam_testing.pytest.aws_resources import ResourceManager
+        from aws_sam_testing.pytest_addin.aws_resources import ResourceManager
 
         template = {
             "Resources": {

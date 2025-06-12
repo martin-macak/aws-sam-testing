@@ -221,6 +221,8 @@ Resources:
         @pytest.fixture(autouse=True)
         def setup(self, monkeypatch):
             monkeypatch.setattr("aws_sam_testing.aws_sam.LocalApi._start_local_api", lambda self: None)
+            monkeypatch.setattr("samcli.lib.utils.file_observer.FileObserver.start", lambda *args, **kwargs: None)
+            monkeypatch.setattr("samcli.lib.utils.file_observer.FileObserver.stop", lambda *args, **kwargs: None)
             yield
 
         def test_run_local_api_no_api(self, tmp_path: Path):

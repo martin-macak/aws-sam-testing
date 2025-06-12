@@ -17,9 +17,9 @@ classifiers = [
 ]
 
 [project.entry-points.pytest11]
-aws_context = "aws_sam_testing.pytest.aws_context"
-aws_lambda_context = "aws_sam_testing.pytest.aws_lambda_context"
-aws_resources = "aws_sam_testing.pytest.aws_resources"
+aws_context = "aws_sam_testing.pytest_addin.aws_context"
+aws_lambda_context = "aws_sam_testing.pytest_addin.aws_lambda_context"
+aws_resources = "aws_sam_testing.pytest_addin.aws_resources"
 
 [tool.hatch.version]
 source = "uv-dynamic-versioning"

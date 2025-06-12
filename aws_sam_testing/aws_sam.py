@@ -252,6 +252,7 @@ class AWSSAMToolkit(CloudFormationTool):
             ...     # Make requests to the local API
             ...     pass
         """
+        import os
         from contextlib import ExitStack
 
         from samcli.commands.local.cli_common.invoke_context import InvokeContext
@@ -345,9 +346,17 @@ class AWSSAMToolkit(CloudFormationTool):
                     template_file=str(api_stack_build_dir / "template.yaml"),
                     function_identifier=None,
                     env_vars_file=None,
-                    docker_volume_basedir=None,
+                    docker_volume_basedir=str(api_stack_build_dir),
                     docker_network=None,
+                    container_host_interface="127.0.0.1",
+                    container_host="localhost",
+                    layer_cache_basedir=str(api_stack_build_dir),
+                    force_image_build=False,
+                    skip_pull_image=False,
                     log_file=str(log_file),
+                    aws_region=os.environ.get("AWS_REGION", "eu-west-1"),
+                    aws_profile=os.environ.get("AWS_PROFILE", "default"),
+                    warm_container_initialization_mode="EAGER",
                 )
 
                 # Run the API locally.
