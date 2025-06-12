@@ -4,6 +4,7 @@ This module provides utilities for running and managing AWS SAM applications loc
 including API Gateway emulation and CloudFormation template handling.
 """
 
+import logging
 from contextlib import contextmanager
 from enum import Enum
 from pathlib import Path
@@ -13,6 +14,8 @@ from samcli.commands.local.cli_common.invoke_context import InvokeContext
 
 from aws_sam_testing.cfn import CloudFormationTemplateProcessor
 from aws_sam_testing.core import CloudFormationTool
+
+logger = logging.getLogger(__name__)
 
 
 class IsolationLevel(Enum):
@@ -68,12 +71,14 @@ class LocalApi:
         self.is_running = False
 
     def __enter__(self) -> "LocalApi":
+        self.ctx.__enter__()
         self.start()
 
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
         self.stop()
+        self.ctx.__exit__(exc_type, exc_value, traceback)
 
     def start(self) -> None:
         if self.is_running:
@@ -188,6 +193,13 @@ class AWSSAMToolkit(CloudFormationTool):
         This context manager starts a local API Gateway emulator for the specified
         API resource and ensures proper cleanup after use.
 
+        This stack uses AWS SAM local to run the local API.
+        The SAM local has a limitation which starts the first API resource in the template.
+        To work around this, the template is inspected and broken into multiple stacks,
+        each containing a single API resource.
+        The stacks are then built and run locally, resulting in multiple API Gateway instances
+        running in parallel on different ports.
+
         Args:
             isolation_level: The isolation level to use for the API.
             api_logical_id: The logical ID of the API resource in the SAM template.
@@ -202,6 +214,8 @@ class AWSSAMToolkit(CloudFormationTool):
             ...     # Make requests to the local API
             ...     pass
         """
+        from contextlib import ExitStack
+
         import yaml
         from samcli.commands.local.cli_common.invoke_context import InvokeContext
 
@@ -220,9 +234,10 @@ class AWSSAMToolkit(CloudFormationTool):
             # At least one API resource is required
             raise ValueError("No API resources found in template")
 
-        api_handers = []
+        api_handlers = []
 
         for api in apis:
+            # Each API is processed in a separate stack, so we need to create a new template for each API.
             api_logical_id = api[0]
             api_data = api[1]
 
@@ -239,27 +254,41 @@ class AWSSAMToolkit(CloudFormationTool):
 
             # We need to create a new template and build it so we can run the API locally
             # The file is created in the same directory as the original template so all the relative paths are correct
-            api_stack_template_path = Path(self.template_path.parent) / ".aws-sam" / "templates" / "local-api" / f"template-{api_logical_id}.yaml"
-            with open(api_stack_template_path, "w") as f:
+            # We also need to create this template at the exact spot where the original template is, so we don't have to relocate
+            # all paths in the template.
+            api_stack_template_path = Path(self.template_path.parent) / f"template-{api_logical_id}.temp.yaml"
+            api_stack_template_debug_path = Path(self.template_path.parent) / ".aws-sam" / "aws-sam-testing-build" / f"api-stack-{api_logical_id}" / "template.yaml"
+
+            # Create the debug directory and the template file
+            api_stack_template_debug_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(api_stack_template_debug_path, "w") as f:
                 yaml.dump(api_stack_template, f)
 
-            api_stack_tool = AWSSAMToolkit(
-                working_dir=self.working_dir,
-                template_path=api_stack_template_path,
-            )
-            api_stack_template_path = api_stack_tool.sam_build(
-                build_dir=Path(self.working_dir) / ".aws-sam" / "aws-sam-testing-build" / f"api-stack-{api_logical_id}",
-            )
+            try:
+                with open(api_stack_template_path, "w") as f:
+                    yaml.dump(api_stack_template, f)
 
-            with InvokeContext(
-                template_file=str(api_stack_template_path),
-                function_identifier=None,
-                env_vars_file=None,
-                docker_volume_basedir=None,
-                docker_network=None,
-            ) as ctx:
+                api_stack_tool = AWSSAMToolkit(
+                    working_dir=self.working_dir,
+                    template_path=api_stack_template_path,
+                )
+
+                # Build the stack for the API template.
+                api_stack_template_path = api_stack_tool.sam_build(
+                    build_dir=Path(self.working_dir) / ".aws-sam" / "aws-sam-testing-build" / f"api-stack-{api_logical_id}",
+                )
+
+                invoke_ctx = InvokeContext(
+                    template_file=str(api_stack_template_path),
+                    function_identifier=None,
+                    env_vars_file=None,
+                    docker_volume_basedir=None,
+                    docker_network=None,
+                )
+
+                # Run the API locally.
                 local_api = LocalApi(
-                    ctx=ctx,
+                    ctx=invoke_ctx,
                     toolkit=self,
                     api_logical_id=api_logical_id,
                     api_data=api_data,
@@ -268,14 +297,14 @@ class AWSSAMToolkit(CloudFormationTool):
                     port=port,
                     host=host,
                 )
+            finally:
+                # Remove the temporary template
+                api_stack_template_path.unlink(missing_ok=True)
 
-            api_handers.append(local_api)
+            api_handlers.append(local_api)
 
-        for api_handler in api_handers:
-            api_handler.start()
+        # Run APIs in managed context.
+        with ExitStack() as stack:
+            resources = [stack.enter_context(api_handler) for api_handler in api_handlers]
 
-        try:
-            yield api_handers
-        finally:
-            for api_handler in api_handers:
-                api_handler.stop()
+            yield resources
