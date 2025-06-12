@@ -218,6 +218,11 @@ Resources:
     class TestRunLocalApi:
         """Test cases for run_local_api method."""
 
+        @pytest.fixture(autouse=True)
+        def setup(self, monkeypatch):
+            monkeypatch.setattr("aws_sam_testing.aws_sam.LocalApi._start_local_api", lambda self: None)
+            yield
+
         def test_run_local_api_no_api(self, tmp_path: Path):
             """Test run_local_api when template has no API resources."""
             # Create a template without any API resources
@@ -329,14 +334,6 @@ def handler(event, context):
                 assert api.api_logical_id == "MyApi"
                 assert api.port is not None
                 assert api.host is not None
-                assert api.url is not None
-                assert api.url.startswith("http://")
-
-                # Print API details for debugging
-                print(f"\nSingle API running at: {api.url}")
-                print(f"API Logical ID: {api.api_logical_id}")
-                print(f"Port: {api.port}")
-                print(f"Host: {api.host}")
 
         def test_run_local_api_multiple_apis(self, tmp_path: Path):
             """Test run_local_api with multiple API resources."""
@@ -479,17 +476,10 @@ def handler(event, context):
                 ports = [api.port for api in apis]
                 assert len(ports) == len(set(ports)), "Each API should have a unique port"
 
-                # Print API details for debugging
-                print("\nMultiple APIs running:")
-                for api in apis:
-                    print(f"- {api.api_logical_id} at {api.url} (port: {api.port})")
-
                 # Verify each API is properly configured
                 for api in apis:
                     assert api.port is not None
                     assert api.host is not None
-                    assert api.url is not None
-                    assert api.url.startswith("http://")
 
                     # Print intermediate build directories for each API
                     api_build_dir = Path(tmp_path) / ".aws-sam" / "aws-sam-testing-build" / f"api-stack-{api.api_logical_id}"
@@ -585,10 +575,6 @@ def handler(event, context):
                 assert api.api_logical_id == "ParameterizedApi"
                 assert api.parameters == parameters
 
-                # Print API details for debugging
-                print(f"\nParameterized API running at: {api.url}")
-                print(f"Parameters: {api.parameters}")
-
         def test_run_local_api_custom_port_host(self, tmp_path: Path):
             """Test run_local_api with custom port and host."""
             # Create a simple template with one API
@@ -648,12 +634,6 @@ def handler(event, context):
                 # Check that custom port and host are used
                 assert api.port == custom_port
                 assert api.host == custom_host
-                assert f"{custom_host}:{custom_port}" in api.url
-
-                # Print API details for debugging
-                print(f"\nCustom API running at: {api.url}")
-                print(f"Custom Port: {api.port}")
-                print(f"Custom Host: {api.host}")
 
         def test_run_local_api_invalid_port(self, tmp_path: Path):
             """Test run_local_api with invalid port values."""

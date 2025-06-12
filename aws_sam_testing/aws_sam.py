@@ -69,6 +69,7 @@ class LocalApi:
         self.port = port
         self.host = host
         self.is_running = False
+        self.server_pid: int | None = None
 
     def __enter__(self) -> "LocalApi":
         self.ctx.__enter__()
@@ -92,21 +93,47 @@ class LocalApi:
         if self.host is None:
             self.host = "127.0.0.1"
 
+        self._start_local_api()
+
         self.is_running = True
 
+    def _start_local_api(self) -> None:
+        import os
+        from tempfile import TemporaryDirectory
+
+        from samcli.commands.local.lib.local_api_service import LocalApiService
+
+        with TemporaryDirectory() as static_dir:
+            service = LocalApiService(
+                lambda_invoke_context=self.ctx,
+                static_dir=str(static_dir),
+                port=self.port,
+                host=self.host,
+                disable_authorizer=True,
+                ssl_context=None,
+            )
+
+            pid = os.fork()
+            if pid == 0:
+                logger.info(f"Starting local API server at http://{self.host}:{self.port}")
+                service.start()
+            else:
+                self.server_pid = pid
+
     def stop(self) -> None:
+        import os
+        import signal
+
         if not self.is_running:
             return
 
-        self.is_running = False
+        if self.server_pid is not None:
+            try:
+                os.kill(self.server_pid, signal.SIGTERM)
+            except Exception:
+                logger.warning("Failed to kill server process", exc_info=True)
 
-    @property
-    def url(self) -> str:
-        """Return the URL of the running API."""
-        if not self.is_running:
-            raise RuntimeError("API is not running")
-        host = self.host or "127.0.0.1"
-        return f"http://{host}:{self.port}"
+        self.is_running = False
 
 
 class AWSSAMToolkit(CloudFormationTool):
