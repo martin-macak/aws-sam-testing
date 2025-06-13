@@ -13,7 +13,10 @@ build: init
 
 # Run tests
 test:
-	uv run pytest tests/
+	uv run pytest -m "not slow" tests/
+
+test-slow:
+	uv run pytest -m "slow" tests/
 
 test-stacks:
 	uv run pytest test_stacks/

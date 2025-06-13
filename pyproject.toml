@@ -46,6 +46,7 @@ line-length = 200
 target-version = "py310"
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 filterwarnings = [
     'ignore:datetime\.datetime\.utcnow\(\) is deprecated:DeprecationWarning',
     'ignore:get_errors is deprecated and will be removed in a future release:DeprecationWarning',

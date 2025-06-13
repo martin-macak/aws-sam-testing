@@ -225,6 +225,7 @@ Resources:
             monkeypatch.setattr("samcli.lib.utils.file_observer.FileObserver.stop", lambda *args, **kwargs: None)
             yield
 
+        @pytest.mark.slow
         def test_run_local_api_no_api(self, tmp_path: Path):
             """Test run_local_api when template has no API resources."""
             # Create a template without any API resources
@@ -262,6 +263,7 @@ def handler(event, context):
                 with toolkit.run_local_api():
                     pass
 
+        @pytest.mark.slow
         def test_run_local_api_single_api(self, tmp_path: Path):
             """Test run_local_api with a single API resource."""
             # Create a template with one API resource
@@ -337,6 +339,7 @@ def handler(event, context):
                 assert api.port is not None
                 assert api.host is not None
 
+        @pytest.mark.slow
         def test_run_local_api_multiple_apis(self, tmp_path: Path):
             """Test run_local_api with multiple API resources."""
             # Create a template with multiple API resources
@@ -495,6 +498,7 @@ def handler(event, context):
                             print(f"\nTemplate for {api.api_logical_id}:")
                             print(api_template_path.read_text())
 
+        @pytest.mark.slow
         def test_run_local_api_with_parameters(self, tmp_path: Path):
             """Test run_local_api with CloudFormation parameters."""
             # Create a template with parameters
@@ -577,6 +581,7 @@ def handler(event, context):
                 assert api.api_logical_id == "ParameterizedApi"
                 assert api.parameters == parameters
 
+        @pytest.mark.slow
         def test_run_local_api_custom_port_host(self, tmp_path: Path):
             """Test run_local_api with custom port and host."""
             # Create a simple template with one API
@@ -637,6 +642,7 @@ def handler(event, context):
                 assert api.port == custom_port
                 assert api.host == custom_host
 
+        @pytest.mark.slow
         def test_run_local_api_invalid_port(self, tmp_path: Path):
             """Test run_local_api with invalid port values."""
             # Create a minimal template
@@ -668,6 +674,7 @@ Resources:
                 with toolkit.run_local_api(port=70000):
                     pass
 
+        @pytest.mark.slow
         def test_run_local_api_empty_host(self, tmp_path: Path):
             """Test run_local_api with empty host string."""
             # Create a minimal template

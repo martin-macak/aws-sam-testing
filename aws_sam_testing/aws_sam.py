@@ -8,11 +8,11 @@ import logging
 from contextlib import contextmanager
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Generator, Optional, Union
+from typing import Any, Dict, Generator, Optional, Union, cast
 
 from samcli.commands.local.cli_common.invoke_context import InvokeContext
 
-from aws_sam_testing.cfn import CloudFormationTemplateProcessor, RefTag
+from aws_sam_testing.cfn import CloudFormationTemplateProcessor
 from aws_sam_testing.core import CloudFormationTool
 
 logger = logging.getLogger(__name__)
@@ -291,28 +291,11 @@ class AWSSAMToolkit(CloudFormationTool):
                 for api in apis_to_remove:
                     api_stack_cfn_processor.remove_resource(api[0])
 
-                # Now find and remove functions that have events referencing the removed APIs
-                removed_api_ids = {api[0] for api in apis_to_remove}
-                functions = api_stack_cfn_processor.find_resources_by_type("AWS::Serverless::Function")
+                # TODO: Remove events referencing the removed APIs
 
-                for func_id, func_data in functions:
-                    events = func_data.get("Properties", {}).get("Events", {})
-                    for event_name, event_data in events.items():
-                        if event_data.get("Type") == "Api":
-                            rest_api_ref = event_data.get("Properties", {}).get("RestApiId")
-                            # Check if this event references a removed API
-                            if isinstance(rest_api_ref, dict) and rest_api_ref.get("Ref") in removed_api_ids:
-                                # Remove the entire function since it depends on a removed API
-                                api_stack_cfn_processor.remove_resource(func_id)
-                                break
-                            elif isinstance(rest_api_ref, RefTag) and rest_api_ref.value in removed_api_ids:
-                                # Handle RefTag instances
-                                api_stack_cfn_processor.remove_resource(func_id)
-                                break
-
-                api_stack_template = api_stack_cfn_processor.processed_template.copy()
+                api_stack_template = cast(Dict[str, Any], api_stack_cfn_processor.processed_template.copy())
             else:
-                api_stack_template = api_stack_cfn_processor.processed_template.copy()
+                api_stack_template = cast(Dict[str, Any], api_stack_cfn_processor.processed_template.copy())
 
             # We need to create a new template and build it so we can run the API locally
             # The file is created in the same directory as the original template so all the relative paths are correct

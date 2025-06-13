@@ -1,1094 +1,12 @@
-import copy
-
-import pytest
-
 from aws_sam_testing.cfn import (
-    Base64Tag,
-    CidrTag,
     CloudFormationTemplateProcessor,
-    FindInMapTag,
-    GetAttTag,
-    GetAZsTag,
-    ImportValueTag,
-    JoinTag,
-    RefTag,
-    SelectTag,
-    SplitTag,
-    SubTag,
     load_yaml,
 )
-
-
-class TestCloudFormationLoader:
-    # Test data for valid YAML inputs
-    VALID_YAML_TESTS = [
-        # Ref tag tests
-        (
-            """
-          Resources:
-            MyBucket:
-              Type: AWS::S3::Bucket
-              Properties:
-                BucketName: !Ref MyBucketName
-          """,
-            {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": RefTag("MyBucketName")}}}},
-        ),
-        # GetAtt tag tests - array notation
-        (
-            """
-          Resources:
-            MyInstance:
-              Type: AWS::EC2::Instance
-              Properties:
-                UserData: !GetAtt 
-                  - MyInstance
-                  - PublicDnsName
-          """,
-            {"Resources": {"MyInstance": {"Type": "AWS::EC2::Instance", "Properties": {"UserData": GetAttTag(["MyInstance", "PublicDnsName"])}}}},
-        ),
-        # GetAtt tag tests - dot notation
-        (
-            """
-          Resources:
-            MyInstance:
-              Type: AWS::EC2::Instance
-              Properties:
-                UserData: !GetAtt MyInstance.PublicDnsName
-          """,
-            {"Resources": {"MyInstance": {"Type": "AWS::EC2::Instance", "Properties": {"UserData": GetAttTag(["MyInstance", "PublicDnsName"])}}}},
-        ),
-        # GetAtt tag tests - dot notation with nested attributes
-        (
-            """
-          Resources:
-            MyFunction:
-              Type: AWS::Lambda::Function
-              Properties:
-                Environment:
-                  Variables:
-                    ROLE_ARN: !GetAtt HelloWorldFunctionRole.Arn
-          """,
-            {"Resources": {"MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Environment": {"Variables": {"ROLE_ARN": GetAttTag(["HelloWorldFunctionRole", "Arn"])}}}}}},
-        ),
-        # Sub tag tests
-        (
-            """
-          Resources:
-            MyBucket:
-              Type: AWS::S3::Bucket
-              Properties:
-                BucketName: !Sub ${AWS::StackName}-my-bucket
-          """,
-            {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": SubTag(["${AWS::StackName}-my-bucket"])}}}},
-        ),
-        # Join tag tests
-        (
-            """
-          Resources:
-            MyBucket:
-              Type: AWS::S3::Bucket
-              Properties:
-                BucketName: !Join 
-                  - '-'
-                  - - !Ref AWS::StackName
-                    - my-bucket
-          """,
-            {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": JoinTag(["-", [RefTag("AWS::StackName"), "my-bucket"]])}}}},
-        ),
-        # Split tag tests
-        (
-            """
-          Resources:
-            MyFunction:
-              Type: AWS::Lambda::Function
-              Properties:
-                Handler: !Split 
-                  - '.'
-                  - index.handler
-          """,
-            {"Resources": {"MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Handler": SplitTag([".", "index.handler"])}}}},
-        ),
-        # Select tag tests
-        (
-            """
-          Resources:
-            MyFunction:
-              Type: AWS::Lambda::Function
-              Properties:
-                Runtime: !Select 
-                  - 0
-                  - - python3.9
-                    - python3.8
-          """,
-            {"Resources": {"MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Runtime": SelectTag([0, ["python3.9", "python3.8"]])}}}},
-        ),
-        # FindInMap tag tests
-        (
-            """
-          Resources:
-            MyInstance:
-              Type: AWS::EC2::Instance
-              Properties:
-                InstanceType: !FindInMap 
-                  - RegionMap
-                  - !Ref AWS::Region
-                  - InstanceType
-          """,
-            {"Resources": {"MyInstance": {"Type": "AWS::EC2::Instance", "Properties": {"InstanceType": FindInMapTag(["RegionMap", RefTag("AWS::Region"), "InstanceType"])}}}},
-        ),
-        # Base64 tag tests
-        (
-            """
-          Resources:
-            MyFunction:
-              Type: AWS::Lambda::Function
-              Properties:
-                Code: !Base64 |
-                  def handler(event, context):
-                      return {'statusCode': 200}
-          """,
-            {"Resources": {"MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Code": Base64Tag("def handler(event, context):\n    return {'statusCode': 200}\n")}}}},
-        ),
-        # Cidr tag tests
-        (
-            """
-          Resources:
-            MyVPC:
-              Type: AWS::EC2::VPC
-              Properties:
-                CidrBlock: !Cidr 
-                  - 10.0.0.0/16
-                  - 8
-                  - 8
-          """,
-            {"Resources": {"MyVPC": {"Type": "AWS::EC2::VPC", "Properties": {"CidrBlock": CidrTag(["10.0.0.0/16", 8, 8])}}}},
-        ),
-        # ImportValue tag tests
-        (
-            """
-          Resources:
-            MyBucket:
-              Type: AWS::S3::Bucket
-              Properties:
-                BucketName: !ImportValue MyExportedBucketName
-          """,
-            {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": ImportValueTag("MyExportedBucketName")}}}},
-        ),
-        # GetAZs tag tests
-        (
-            """
-          Resources:
-            MyVPC:
-              Type: AWS::EC2::VPC
-              Properties:
-                AvailabilityZones: !GetAZs us-east-1
-          """,
-            {"Resources": {"MyVPC": {"Type": "AWS::EC2::VPC", "Properties": {"AvailabilityZones": GetAZsTag("us-east-1")}}}},
-        ),
-    ]
-
-    # Test data for invalid YAML inputs
-    INVALID_YAML_TESTS = [
-        # Invalid Ref tag (missing value)
-        """
-      Resources:
-        MyBucket:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: !Ref
-      """,
-        # Invalid GetAtt tag (array notation with wrong number of arguments)
-        """
-      Resources:
-        MyInstance:
-          Type: AWS::EC2::Instance
-          Properties:
-            UserData: !GetAtt 
-              - MyInstance
-      """,
-        # Invalid GetAtt tag (dot notation without dot)
-        """
-      Resources:
-        MyInstance:
-          Type: AWS::EC2::Instance
-          Properties:
-            UserData: !GetAtt MyInstance
-      """,
-        # Invalid Sub tag (missing value)
-        """
-      Resources:
-        MyBucket:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: !Sub
-      """,
-        # Invalid Join tag (missing delimiter)
-        """
-      Resources:
-        MyBucket:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: !Join
-              - my-bucket
-      """,
-        # Invalid Split tag (missing delimiter)
-        """
-      Resources:
-        MyFunction:
-          Type: AWS::Lambda::Function
-          Properties:
-            Handler: !Split index.handler
-      """,
-        # Invalid Select tag (wrong index type)
-        """
-      Resources:
-        MyFunction:
-          Type: AWS::Lambda::Function
-          Properties:
-            Runtime: !Select 
-              - "0"
-              - - python3.9
-                - python3.8
-      """,
-        # Invalid FindInMap tag (missing arguments)
-        """
-      Resources:
-        MyInstance:
-          Type: AWS::EC2::Instance
-          Properties:
-            InstanceType: !FindInMap RegionMap
-      """,
-        # Invalid Cidr tag (wrong number of arguments)
-        """
-      Resources:
-        MyVPC:
-          Type: AWS::EC2::VPC
-          Properties:
-            CidrBlock: !Cidr 10.0.0.0/16
-      """,
-    ]
-
-    @pytest.mark.parametrize("yaml_content,expected", VALID_YAML_TESTS)
-    def test_valid_yaml_parsing(self, yaml_content, expected):
-        """Test parsing of valid YAML content with CloudFormation tags."""
-        result = load_yaml(yaml_content)
-        assert result == expected
-
-    @pytest.mark.parametrize("yaml_content", INVALID_YAML_TESTS)
-    def test_invalid_yaml_parsing(self, yaml_content):
-        """Test that invalid YAML content raises appropriate exceptions."""
-        with pytest.raises(Exception):
-            load_yaml(yaml_content)
-
-    def test_nested_tags(self):
-        """Test parsing of nested CloudFormation tags."""
-        yaml_content = """
-      Resources:
-        MyBucket:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: !Join 
-              - '-'
-              - - !Ref AWS::StackName
-                - !Sub ${Environment}-bucket
-      """
-        result = load_yaml(yaml_content)
-        assert isinstance(result["Resources"]["MyBucket"]["Properties"]["BucketName"], JoinTag)
-        join_tag = result["Resources"]["MyBucket"]["Properties"]["BucketName"]
-        assert join_tag.value[0] == "-"
-        assert isinstance(join_tag.value[1][0], RefTag)
-        assert isinstance(join_tag.value[1][1], SubTag)
-
-    def test_empty_yaml(self):
-        """Test parsing of empty YAML content."""
-        result = load_yaml("")
-        assert result is None
-
-    def test_yaml_without_tags(self):
-        """Test parsing of YAML content without CloudFormation tags."""
-        yaml_content = """
-      Resources:
-        MyBucket:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: my-bucket
-      """
-        result = load_yaml(yaml_content)
-        assert result["Resources"]["MyBucket"]["Properties"]["BucketName"] == "my-bucket"
-
-    def test_yaml_with_comments(self):
-        """Test parsing of YAML content with comments."""
-        yaml_content = """
-      # This is a comment
-      Resources:
-        MyBucket:
-          Type: AWS::S3::Bucket
-          Properties:
-            # Another comment
-            BucketName: !Ref MyBucketName
-      """
-        result = load_yaml(yaml_content)
-        assert isinstance(result["Resources"]["MyBucket"]["Properties"]["BucketName"], RefTag)
-        assert result["Resources"]["MyBucket"]["Properties"]["BucketName"].value == "MyBucketName"
-
-
-# Tests for CloudFormationTemplateProcessor
+from aws_sam_testing.cfn_tags import CloudFormationObject
 
 
 class TestCloudFormationTemplateProcessor:
-    def test_remove_dependencies_simple_ref(self):
-        """Test removing dependencies with simple !Ref."""
-        yaml_content = """
-    Resources:
-      MyBucket:
-        Type: AWS::S3::Bucket
-        Properties:
-          BucketName: my-bucket
-      MyFunction:
-        Type: AWS::Lambda::Function
-        Properties:
-          Environment:
-            Variables:
-              BUCKET_NAME: !Ref MyBucket
-    """
-        template = load_yaml(yaml_content)
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.remove_resource("MyFunction")
-
-        # MyBucket should be removed as it's only referenced by MyFunction
-        assert "MyBucket" not in processor.processed_template["Resources"]
-        assert "MyFunction" not in processor.processed_template["Resources"]
-
-    def test_remove_dependencies_multiple_references(self):
-        """Test removing dependencies when resource is referenced by multiple resources."""
-        yaml_content = """
-      Resources:
-        MyBucket:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: my-bucket
-        MyFunction1:
-          Type: AWS::Lambda::Function
-          Properties:
-            Environment:
-              Variables:
-                BUCKET_NAME: !Ref MyBucket
-        MyFunction2:
-          Type: AWS::Lambda::Function
-          Properties:
-            Environment:
-              Variables:
-                BUCKET_NAME: !Ref MyBucket
-      """
-        template = load_yaml(yaml_content)
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.remove_resource("MyFunction1")
-
-        # MyBucket should NOT be removed as it's still referenced by MyFunction2
-        assert "MyBucket" in processor.processed_template["Resources"]
-        assert "MyFunction1" not in processor.processed_template["Resources"]
-        assert "MyFunction2" in processor.processed_template["Resources"]
-
-    def test_remove_dependencies_transitive(self):
-        """Test removing transitive dependencies."""
-        yaml_content = """
-      Resources:
-        MyBucket:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: my-bucket
-        MyBucketPolicy:
-          Type: AWS::S3::BucketPolicy
-          Properties:
-            Bucket: !Ref MyBucket
-            PolicyDocument: {}
-        MyFunction:
-          Type: AWS::Lambda::Function
-          Properties:
-            Environment:
-              Variables:
-                BUCKET_POLICY: !Ref MyBucketPolicy
-      """
-        template = load_yaml(yaml_content)
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.remove_resource("MyFunction")
-
-        # Both MyBucketPolicy and MyBucket should be removed (transitive)
-        assert "MyBucket" not in processor.processed_template["Resources"]
-        assert "MyBucketPolicy" not in processor.processed_template["Resources"]
-        assert "MyFunction" not in processor.processed_template["Resources"]
-
-    def test_remove_dependencies_with_outputs(self):
-        """Test that resources referenced in Outputs are not removed."""
-        yaml_content = """
-      Resources:
-        MyBucket:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: my-bucket
-        MyFunction:
-          Type: AWS::Lambda::Function
-          Properties:
-            Environment:
-              Variables:
-                BUCKET_NAME: !Ref MyBucket
-      Outputs:
-        BucketName:
-          Value: !Ref MyBucket
-          Export:
-            Name: MyBucketName
-      """
-        template = load_yaml(yaml_content)
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.remove_resource("MyFunction")
-
-        # MyBucket should NOT be removed as it's referenced in Outputs
-        assert "MyBucket" in processor.processed_template["Resources"]
-        assert "MyFunction" not in processor.processed_template["Resources"]
-
-    def test_remove_dependencies_get_att(self):
-        """Test removing dependencies with !GetAtt."""
-        yaml_content = """
-      Resources:
-        MyBucket:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: my-bucket
-        MyFunction:
-          Type: AWS::Lambda::Function
-          Properties:
-            Environment:
-              Variables:
-                BUCKET_ARN: !GetAtt
-                  - MyBucket
-                  - Arn
-      """
-        template = load_yaml(yaml_content)
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.remove_resource("MyFunction")
-
-        # MyBucket should be removed
-        assert "MyBucket" not in processor.processed_template["Resources"]
-        assert "MyFunction" not in processor.processed_template["Resources"]
-
-    def test_remove_dependencies_get_att_dot_notation(self):
-        """Test removing dependencies with !GetAtt using dot notation."""
-        yaml_content = """
-      Resources:
-        MyBucket:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: my-bucket
-        MyFunction:
-          Type: AWS::Lambda::Function
-          Properties:
-            Environment:
-              Variables:
-                BUCKET_ARN: !GetAtt MyBucket.Arn
-      """
-        template = load_yaml(yaml_content)
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.remove_resource("MyFunction")
-
-        # MyBucket should be removed
-        assert "MyBucket" not in processor.processed_template["Resources"]
-        assert "MyFunction" not in processor.processed_template["Resources"]
-
-    def test_remove_dependencies_sub_tag(self):
-        """Test removing dependencies with !Sub tag."""
-        yaml_content = """
-      Resources:
-        MyBucket:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: my-bucket
-        MyFunction:
-          Type: AWS::Lambda::Function
-          Properties:
-            Environment:
-              Variables:
-                BUCKET_REF: !Sub "${MyBucket}-suffix"
-      """
-        template = load_yaml(yaml_content)
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.remove_resource("MyFunction")
-
-        # MyBucket should be removed
-        assert "MyBucket" not in processor.processed_template["Resources"]
-        assert "MyFunction" not in processor.processed_template["Resources"]
-
-    def test_remove_dependencies_fn_ref(self):
-        """Test removing dependencies with Fn::Ref (dict style)."""
-        yaml_content = """
-      Resources:
-        MyBucket:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: my-bucket
-        MyFunction:
-          Type: AWS::Lambda::Function
-          Properties:
-            Environment:
-              Variables:
-                BUCKET_NAME:
-                  Ref: MyBucket
-      """
-        template = load_yaml(yaml_content)
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.remove_resource("MyFunction")
-
-        # MyBucket should be removed
-        assert "MyBucket" not in processor.processed_template["Resources"]
-        assert "MyFunction" not in processor.processed_template["Resources"]
-
-    def test_remove_dependencies_fn_get_att(self):
-        """Test removing dependencies with Fn::GetAtt (dict style)."""
-        yaml_content = """
-      Resources:
-        MyBucket:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: my-bucket
-        MyFunction:
-          Type: AWS::Lambda::Function
-          Properties:
-            Environment:
-              Variables:
-                BUCKET_ARN:
-                  Fn::GetAtt:
-                    - MyBucket
-                    - Arn
-      """
-        template = load_yaml(yaml_content)
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.remove_resource("MyFunction")
-
-        # MyBucket should be removed
-        assert "MyBucket" not in processor.processed_template["Resources"]
-        assert "MyFunction" not in processor.processed_template["Resources"]
-
-    def test_remove_dependencies_nested_tags(self):
-        """Test removing dependencies with nested CloudFormation tags."""
-        yaml_content = """
-      Resources:
-        MyBucket:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: my-bucket
-        MyRole:
-          Type: AWS::IAM::Role
-          Properties:
-            AssumeRolePolicyDocument: {}
-        MyFunction:
-          Type: AWS::Lambda::Function
-          Properties:
-            Environment:
-              Variables:
-                RESOURCE_ARN: !Join
-                  - ':'
-                  - - arn:aws:s3
-                    - ''
-                    - ''
-                    - !GetAtt
-                      - MyBucket
-                      - Arn
-                    - !Ref MyRole
-      """
-        template = load_yaml(yaml_content)
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.remove_resource("MyFunction")
-
-        # Both MyBucket and MyRole should be removed
-        assert "MyBucket" not in processor.processed_template["Resources"]
-        assert "MyRole" not in processor.processed_template["Resources"]
-        assert "MyFunction" not in processor.processed_template["Resources"]
-
-    def test_remove_dependencies_circular(self):
-        """Test removing dependencies with circular references."""
-        yaml_content = """
-      Resources:
-        ResourceA:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: !Ref ResourceB
-        ResourceB:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: !Ref ResourceA
-        MyFunction:
-          Type: AWS::Lambda::Function
-          Properties:
-            Environment:
-              Variables:
-                BUCKET_NAME: !Ref ResourceA
-      """
-        template = load_yaml(yaml_content)
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.remove_resource("MyFunction")
-
-        # ResourceA and ResourceB should both be removed despite circular reference
-        assert "ResourceA" not in processor.processed_template["Resources"]
-        assert "ResourceB" not in processor.processed_template["Resources"]
-        assert "MyFunction" not in processor.processed_template["Resources"]
-
-    def test_remove_dependencies_in_conditions(self):
-        """Test that resources referenced in Conditions are not removed."""
-        yaml_content = """
-      Resources:
-        MyParameter:
-          Type: AWS::SSM::Parameter
-          Properties:
-            Value: test
-        MyFunction:
-          Type: AWS::Lambda::Function
-          Properties:
-            Environment:
-              Variables:
-                PARAM_NAME: !Ref MyParameter
-      Conditions:
-        IsProduction:
-          Fn::Equals:
-            - !Ref MyParameter
-            - prod
-      """
-        template = load_yaml(yaml_content)
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.remove_resource("MyFunction")
-
-        # MyParameter should NOT be removed as it's referenced in Conditions
-        assert "MyParameter" in processor.processed_template["Resources"]
-        assert "MyFunction" not in processor.processed_template["Resources"]
-
-    def test_remove_dependencies_no_auto_remove(self):
-        """Test remove_resource with auto_remove_dependencies=False."""
-        template = {
-            "Resources": {
-                "MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": "my-bucket"}},
-                "MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Environment": {"Variables": {"BUCKET_NAME": RefTag("MyBucket")}}}},
-            }
-        }
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.remove_resource("MyFunction", auto_remove_dependencies=False)
-
-        # MyBucket should NOT be removed when auto_remove_dependencies=False
-        assert "MyBucket" in processor.processed_template["Resources"]
-        assert "MyFunction" not in processor.processed_template["Resources"]
-
-    def test_remove_dependencies_complex_sub(self):
-        """Test removing dependencies with complex !Sub tag with variable mapping."""
-        template = {
-            "Resources": {
-                "MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": "my-bucket"}},
-                "MyRole": {"Type": "AWS::IAM::Role", "Properties": {"AssumeRolePolicyDocument": {}}},
-                "MyFunction": {
-                    "Type": "AWS::Lambda::Function",
-                    "Properties": {
-                        "Environment": {"Variables": {"RESOURCE_ARN": SubTag(["arn:aws:s3:::${BucketName}/${RoleName}", {"BucketName": RefTag("MyBucket"), "RoleName": RefTag("MyRole")}])}}
-                    },
-                },
-            }
-        }
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.remove_resource("MyFunction")
-
-        # Both MyBucket and MyRole should be removed
-        assert "MyBucket" not in processor.processed_template["Resources"]
-        assert "MyRole" not in processor.processed_template["Resources"]
-        assert "MyFunction" not in processor.processed_template["Resources"]
-
-    def test_remove_dependencies_find_in_map(self):
-        """Test removing dependencies with !FindInMap containing references."""
-        template = {
-            "Resources": {
-                "MyParameter": {"Type": "AWS::SSM::Parameter", "Properties": {"Value": "test"}},
-                "MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"InstanceType": FindInMapTag(["RegionMap", RefTag("MyParameter"), "InstanceType"])}},
-            }
-        }
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.remove_resource("MyFunction")
-
-        # MyParameter should be removed
-        assert "MyParameter" not in processor.processed_template["Resources"]
-        assert "MyFunction" not in processor.processed_template["Resources"]
-
-    def test_remove_dependencies_ref_and_fn_ref(self):
-        """Test removing dependencies with both !Ref and Fn::Ref."""
-        yaml_content = """
-      Resources:
-        MyBucket:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: my-bucket
-        MyFunction1:
-          Type: AWS::Lambda::Function
-          Properties:
-            Environment:
-              Variables:
-                BUCKET_NAME: !Ref MyBucket
-        MyFunction2:
-          Type: AWS::Lambda::Function
-          Properties:
-            Environment:
-              Variables:
-                BUCKET_NAME:
-                  Ref: MyBucket
-      """
-        template = load_yaml(yaml_content)
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.remove_resource("MyFunction1")
-        processor.remove_resource("MyFunction2")
-
-        # MyBucket should be removed after both functions are removed
-        assert "MyBucket" not in processor.processed_template["Resources"]
-        assert "MyFunction1" not in processor.processed_template["Resources"]
-        assert "MyFunction2" not in processor.processed_template["Resources"]
-
-    def test_remove_dependencies_getatt_and_fn_getatt(self):
-        """Test removing dependencies with both !GetAtt and Fn::GetAtt."""
-        yaml_content = """
-      Resources:
-        MyBucket:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: my-bucket
-        MyFunction1:
-          Type: AWS::Lambda::Function
-          Properties:
-            Environment:
-              Variables:
-                BUCKET_ARN: !GetAtt
-                  - MyBucket
-                  - Arn
-        MyFunction2:
-          Type: AWS::Lambda::Function
-          Properties:
-            Environment:
-              Variables:
-                BUCKET_ARN:
-                  Fn::GetAtt:
-                    - MyBucket
-                    - Arn
-      """
-        template = load_yaml(yaml_content)
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.remove_resource("MyFunction1")
-
-        # MyBucket should NOT be removed as it's still referenced by MyFunction2
-        assert "MyBucket" in processor.processed_template["Resources"]
-        assert "MyFunction1" not in processor.processed_template["Resources"]
-        assert "MyFunction2" in processor.processed_template["Resources"]
-
-    def test_remove_dependencies_direct_call(self):
-        """Test calling remove_dependencies directly to remove circular references."""
-        yaml_content = """
-      Resources:
-        ResourceA:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: !Ref ResourceB
-        ResourceB:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: !Ref ResourceA
-        ResourceC:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: my-bucket
-      """
-        template = load_yaml(yaml_content)
-
-        processor = CloudFormationTemplateProcessor(template)
-        # Call remove_dependencies directly - it should remove circular references
-        processor.remove_dependencies("any_resource")
-
-        # ResourceA and ResourceB form a circular reference island and should be removed
-        assert "ResourceA" not in processor.processed_template["Resources"]
-        assert "ResourceB" not in processor.processed_template["Resources"]
-        # ResourceC is not part of any circular reference and should remain
-        assert "ResourceC" in processor.processed_template["Resources"]
-
-    def test_remove_dependencies_complex_island(self):
-        """Test removing complex circular reference islands."""
-        yaml_content = """
-      Resources:
-        ResourceA:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: !Ref ResourceB
-        ResourceB:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: !Ref ResourceC
-        ResourceC:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: !Ref ResourceA
-        ResourceD:
-          Type: AWS::Lambda::Function
-          Properties:
-            Environment:
-              Variables:
-                BUCKET: !Ref ResourceE
-        ResourceE:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: !Ref ResourceD
-      """
-        template = load_yaml(yaml_content)
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.remove_dependencies("dummy")
-
-        # All resources form circular reference islands and should be removed
-        assert "ResourceA" not in processor.processed_template["Resources"]
-        assert "ResourceB" not in processor.processed_template["Resources"]
-        assert "ResourceC" not in processor.processed_template["Resources"]
-        assert "ResourceD" not in processor.processed_template["Resources"]
-        assert "ResourceE" not in processor.processed_template["Resources"]
-
-    def test_remove_dependencies_island_with_external_reference(self):
-        """Test that circular reference islands referenced from outside are not removed."""
-        yaml_content = """
-      Resources:
-        ResourceA:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: !Ref ResourceB
-        ResourceB:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: !Ref ResourceA
-        ResourceC:
-          Type: AWS::Lambda::Function
-          Properties:
-            Environment:
-              Variables:
-                BUCKET: !Ref ResourceA
-      """
-        template = load_yaml(yaml_content)
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.remove_dependencies("dummy")
-
-        # ResourceA and ResourceB form a circular reference but ResourceA is referenced by ResourceC
-        # So they should NOT be removed
-        assert "ResourceA" in processor.processed_template["Resources"]
-        assert "ResourceB" in processor.processed_template["Resources"]
-        assert "ResourceC" in processor.processed_template["Resources"]
-
-    def test_remove_dependencies_mixed_scenarios(self):
-        """Test mixed scenarios with both removable and non-removable islands."""
-        yaml_content = """
-      Resources:
-        # Circular reference island that should be removed
-        IslandA1:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: !Ref IslandA2
-        IslandA2:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: !Ref IslandA1
-        
-        # Circular reference island referenced from Outputs - should NOT be removed
-        IslandB1:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: !Ref IslandB2
-        IslandB2:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: !Ref IslandB1
-        
-        # Regular resource
-        RegularResource:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: regular-bucket
-            
-      Outputs:
-        BucketRef:
-          Value: !Ref IslandB1
-      """
-        template = load_yaml(yaml_content)
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.remove_dependencies("dummy")
-
-        # IslandA1 and IslandA2 should be removed
-        assert "IslandA1" not in processor.processed_template["Resources"]
-        assert "IslandA2" not in processor.processed_template["Resources"]
-
-        # IslandB1 and IslandB2 should NOT be removed (referenced in Outputs)
-        assert "IslandB1" in processor.processed_template["Resources"]
-        assert "IslandB2" in processor.processed_template["Resources"]
-
-        # RegularResource should remain
-        assert "RegularResource" in processor.processed_template["Resources"]
-
-    def test_remove_dependencies_with_fn_functions(self):
-        """Test circular references using Fn:: style functions."""
-        yaml_content = """
-      Resources:
-        ResourceA:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName:
-              Ref: ResourceB
-        ResourceB:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName:
-              Fn::Sub: "${ResourceA}-suffix"
-      """
-        template = load_yaml(yaml_content)
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.remove_dependencies("dummy")
-
-        # ResourceA and ResourceB form a circular reference and should be removed
-        assert "ResourceA" not in processor.processed_template["Resources"]
-        assert "ResourceB" not in processor.processed_template["Resources"]
-
-    def test_remove_dependencies_self_reference(self):
-        """Test resources that reference themselves."""
-        yaml_content = """
-      Resources:
-        SelfReference:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: !Ref SelfReference
-        NormalResource:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: normal-bucket
-      """
-        template = load_yaml(yaml_content)
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.remove_dependencies("dummy")
-
-        # SelfReference forms a single-node cycle and should be removed
-        assert "SelfReference" not in processor.processed_template["Resources"]
-        # NormalResource should remain
-        assert "NormalResource" in processor.processed_template["Resources"]
-
-    def test_remove_dependencies_empty_template(self):
-        """Test remove_dependencies on empty template."""
-        template = {}
-        processor = CloudFormationTemplateProcessor(template)
-        processor.remove_dependencies("dummy")
-        assert processor.processed_template == {}
-
-    def test_remove_dependencies_no_resources(self):
-        """Test remove_dependencies on template without Resources section."""
-        template = {"Outputs": {"Test": {"Value": "test"}}}
-        processor = CloudFormationTemplateProcessor(template)
-        processor.remove_dependencies("dummy")
-        assert processor.processed_template == {"Outputs": {"Test": {"Value": "test"}}}
-
-    def test_remove_dependencies_sub_and_fn_sub(self):
-        """Test removing dependencies with both !Sub and Fn::Sub."""
-        yaml_content = """
-      Resources:
-        MyBucket:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: my-bucket
-        MyFunction1:
-          Type: AWS::Lambda::Function
-          Properties:
-            Environment:
-              Variables:
-                BUCKET_REF: !Sub "${MyBucket}-suffix"
-        MyFunction2:
-          Type: AWS::Lambda::Function
-          Properties:
-            Environment:
-              Variables:
-                BUCKET_REF:
-                  Fn::Sub: "${MyBucket}-suffix"
-      """
-        template = load_yaml(yaml_content)
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.remove_resource("MyFunction1")
-        processor.remove_resource("MyFunction2")
-
-        # MyBucket should be removed after both functions are removed
-        assert "MyBucket" not in processor.processed_template["Resources"]
-        assert "MyFunction1" not in processor.processed_template["Resources"]
-        assert "MyFunction2" not in processor.processed_template["Resources"]
-
-    def test_remove_dependencies_sub_with_exclamation(self):
-        """Test removing dependencies with !Sub containing ${!ResourceName}."""
-        yaml_content = """
-      Resources:
-        MyBucket:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: my-bucket
-        MyFunction:
-          Type: AWS::Lambda::Function
-          Properties:
-            Environment:
-              Variables:
-                BUCKET_ARN: !Sub "arn:aws:s3:::${!MyBucket}"
-      """
-        template = load_yaml(yaml_content)
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.remove_resource("MyFunction")
-
-        # MyBucket should be removed
-        assert "MyBucket" not in processor.processed_template["Resources"]
-        assert "MyFunction" not in processor.processed_template["Resources"]
-
-    def test_remove_dependencies_multiple_refs_in_value(self):
-        """Test removing dependencies when a single value contains multiple references."""
-        yaml_content = """
-      Resources:
-        MyBucket:
-          Type: AWS::S3::Bucket
-          Properties:
-            BucketName: my-bucket
-        MyRole:
-          Type: AWS::IAM::Role
-          Properties:
-            AssumeRolePolicyDocument: {}
-        MyFunction:
-          Type: AWS::Lambda::Function
-          Properties:
-            Environment:
-              Variables:
-                COMBINED: !Sub "${MyBucket}:${MyRole}"
-      """
-        template = load_yaml(yaml_content)
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.remove_resource("MyFunction")
-
-        # Both MyBucket and MyRole should be removed
-        assert "MyBucket" not in processor.processed_template["Resources"]
-        assert "MyRole" not in processor.processed_template["Resources"]
-        assert "MyFunction" not in processor.processed_template["Resources"]
+    pass
 
 
 class TestFindResources:
@@ -1342,16 +260,16 @@ class TestFindResources:
         buckets = processor.find_resources_by_type("AWS::S3::Bucket")
         assert len(buckets) == 1
         _, bucket_data = buckets[0]
-        assert isinstance(bucket_data["Properties"]["BucketName"], RefTag)
-        assert bucket_data["Properties"]["BucketName"].value == "BucketNameParam"
+        assert isinstance(bucket_data["Properties"]["BucketName"], CloudFormationObject)
+        assert bucket_data["Properties"]["BucketName"].data == "BucketNameParam"
 
         # Find Lambda function with GetAtt tag
         functions = processor.find_resources_by_type("AWS::Lambda::Function")
         assert len(functions) == 1
         _, func_data = functions[0]
         env_vars = func_data["Properties"]["Environment"]["Variables"]
-        assert isinstance(env_vars["BUCKET_ARN"], GetAttTag)
-        assert env_vars["BUCKET_ARN"].value == ["MyBucket", "Arn"]
+        assert isinstance(env_vars["BUCKET_ARN"], CloudFormationObject)
+        assert env_vars["BUCKET_ARN"].data == ["MyBucket", "Arn"]
 
     def test_find_resources_by_type_serverless_function(self):
         """Test finding AWS::Serverless::Function resources."""
@@ -1404,331 +322,728 @@ class TestFindResources:
         assert len(buckets_lower) == 0
 
 
-class TestTransformCfnTags:
-    # Test data for transform_cfn_tags parametrized tests
-    TRANSFORM_TAG_TESTS = [
-        # !Ref -> Ref
-        (
-            {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": RefTag("MyParameter")}}}},
-            {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": {"Ref": "MyParameter"}}}}},
-            "!Ref tag transformation",
-        ),
-        # !GetAtt with array notation -> Fn::GetAtt (no change needed)
-        (
-            {"Resources": {"MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Role": GetAttTag(["MyRole", "Arn"])}}}},
-            {"Resources": {"MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Role": {"Fn::GetAtt": ["MyRole", "Arn"]}}}}},
-            "!GetAtt array notation transformation",
-        ),
-        # !GetAtt with dot notation (converted to array) -> Fn::GetAtt
-        (
-            {"Resources": {"MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Role": GetAttTag(["MyRole", "Arn"])}}}},
-            {"Resources": {"MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Role": {"Fn::GetAtt": ["MyRole", "Arn"]}}}}},
-            "!GetAtt dot notation transformation (already converted to array by parser)",
-        ),
-        # !Sub simple -> Fn::Sub
-        (
-            {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": SubTag(["${AWS::StackName}-bucket"])}}}},
-            {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": {"Fn::Sub": "${AWS::StackName}-bucket"}}}}},
-            "!Sub simple transformation",
-        ),
-        # !Sub with variable mapping -> Fn::Sub
-        (
-            {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": SubTag(["${BucketPrefix}-bucket", {"BucketPrefix": RefTag("BucketParam")}])}}}},
-            {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": {"Fn::Sub": ["${BucketPrefix}-bucket", {"BucketPrefix": {"Ref": "BucketParam"}}]}}}}},
-            "!Sub with variable mapping transformation",
-        ),
-        # !Join -> Fn::Join
-        (
-            {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": JoinTag(["-", ["prefix", RefTag("Suffix")]])}}}},
-            {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": {"Fn::Join": ["-", ["prefix", {"Ref": "Suffix"}]]}}}}},
-            "!Join transformation with nested tags",
-        ),
-        # !Split -> Fn::Split
-        (
-            {"Resources": {"MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Handler": SplitTag([".", RefTag("HandlerParam")])}}}},
-            {"Resources": {"MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Handler": {"Fn::Split": [".", {"Ref": "HandlerParam"}]}}}}},
-            "!Split transformation with nested tag",
-        ),
-        # !Select -> Fn::Select
-        (
-            {"Resources": {"MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Runtime": SelectTag([0, RefTag("RuntimesList")])}}}},
-            {"Resources": {"MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Runtime": {"Fn::Select": [0, {"Ref": "RuntimesList"}]}}}}},
-            "!Select transformation with nested tag",
-        ),
-        # !FindInMap -> Fn::FindInMap
-        (
-            {"Resources": {"MyInstance": {"Type": "AWS::EC2::Instance", "Properties": {"InstanceType": FindInMapTag(["RegionMap", RefTag("AWS::Region"), "InstanceType"])}}}},
-            {"Resources": {"MyInstance": {"Type": "AWS::EC2::Instance", "Properties": {"InstanceType": {"Fn::FindInMap": ["RegionMap", {"Ref": "AWS::Region"}, "InstanceType"]}}}}},
-            "!FindInMap transformation with nested tag",
-        ),
-        # !Base64 -> Fn::Base64
-        (
-            {"Resources": {"MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Code": Base64Tag(SubTag(["echo ${Message}"]))}}}},
-            {"Resources": {"MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Code": {"Fn::Base64": {"Fn::Sub": "echo ${Message}"}}}}}},
-            "!Base64 transformation with nested tag",
-        ),
-        # !Cidr -> Fn::Cidr
-        (
-            {"Resources": {"MyVPC": {"Type": "AWS::EC2::VPC", "Properties": {"CidrBlock": CidrTag([RefTag("VPCCidr"), 8, 8])}}}},
-            {"Resources": {"MyVPC": {"Type": "AWS::EC2::VPC", "Properties": {"CidrBlock": {"Fn::Cidr": [{"Ref": "VPCCidr"}, 8, 8]}}}}},
-            "!Cidr transformation with nested tag",
-        ),
-        # !ImportValue -> Fn::ImportValue
-        (
-            {"Outputs": {"MyOutput": {"Value": ImportValueTag(SubTag(["${StackName}-export"]))}}},
-            {"Outputs": {"MyOutput": {"Value": {"Fn::ImportValue": {"Fn::Sub": "${StackName}-export"}}}}},
-            "!ImportValue transformation with nested tag",
-        ),
-        # !GetAZs -> Fn::GetAZs
-        (
-            {"Resources": {"MyVPC": {"Type": "AWS::EC2::VPC", "Properties": {"AvailabilityZones": GetAZsTag(RefTag("AWS::Region"))}}}},
-            {"Resources": {"MyVPC": {"Type": "AWS::EC2::VPC", "Properties": {"AvailabilityZones": {"Fn::GetAZs": {"Ref": "AWS::Region"}}}}}},
-            "!GetAZs transformation with nested tag",
-        ),
-    ]
-
-    @pytest.mark.parametrize("input_template,expected_template,description", TRANSFORM_TAG_TESTS)
-    def test_transform_single_tag(self, input_template, expected_template, description):
-        """Test transformation of individual CloudFormation tags."""
-        processor = CloudFormationTemplateProcessor(input_template)
-        processor.transform_cfn_tags()
-        assert processor.processed_template == expected_template, f"Failed: {description}"
-
-    def test_transform_deeply_nested_tags(self):
-        """Test transformation of deeply nested CloudFormation tags."""
-        template = {
-            "Resources": {
-                "MyFunction": {
-                    "Type": "AWS::Lambda::Function",
-                    "Properties": {
-                        "Environment": {
-                            "Variables": {
-                                "COMPLEX_VAR": JoinTag(
-                                    [
-                                        ":",
-                                        [
-                                            SelectTag([0, SplitTag([",", RefTag("ListParam")])]),
-                                            GetAttTag(["MyBucket", "Arn"]),
-                                            SubTag(["${Prefix}-${Suffix}", {"Prefix": RefTag("PrefixParam"), "Suffix": RefTag("SuffixParam")}]),
-                                        ],
-                                    ]
-                                )
-                            }
-                        }
-                    },
-                }
-            }
-        }
-
-        expected = {
-            "Resources": {
-                "MyFunction": {
-                    "Type": "AWS::Lambda::Function",
-                    "Properties": {
-                        "Environment": {
-                            "Variables": {
-                                "COMPLEX_VAR": {
-                                    "Fn::Join": [
-                                        ":",
-                                        [
-                                            {"Fn::Select": [0, {"Fn::Split": [",", {"Ref": "ListParam"}]}]},
-                                            {"Fn::GetAtt": ["MyBucket", "Arn"]},
-                                            {"Fn::Sub": ["${Prefix}-${Suffix}", {"Prefix": {"Ref": "PrefixParam"}, "Suffix": {"Ref": "SuffixParam"}}]},
-                                        ],
-                                    ]
-                                }
-                            }
-                        }
-                    },
-                }
-            }
-        }
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.transform_cfn_tags()
-        assert processor.processed_template == expected
-
-    def test_transform_multiple_resources(self):
-        """Test transformation across multiple resources."""
-        template = {
-            "Resources": {
-                "MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": RefTag("BucketNameParam")}},
-                "MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Environment": {"Variables": {"BUCKET_ARN": GetAttTag(["MyBucket", "Arn"]), "BUCKET_NAME": RefTag("BucketNameParam")}}}},
-            },
-            "Outputs": {"BucketArn": {"Value": GetAttTag(["MyBucket", "Arn"])}, "FunctionName": {"Value": RefTag("MyFunction")}},
-        }
-
-        expected = {
-            "Resources": {
-                "MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": {"Ref": "BucketNameParam"}}},
-                "MyFunction": {
-                    "Type": "AWS::Lambda::Function",
-                    "Properties": {"Environment": {"Variables": {"BUCKET_ARN": {"Fn::GetAtt": ["MyBucket", "Arn"]}, "BUCKET_NAME": {"Ref": "BucketNameParam"}}}},
-                },
-            },
-            "Outputs": {"BucketArn": {"Value": {"Fn::GetAtt": ["MyBucket", "Arn"]}}, "FunctionName": {"Value": {"Ref": "MyFunction"}}},
-        }
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.transform_cfn_tags()
-        assert processor.processed_template == expected
-
-    def test_transform_empty_template(self):
-        """Test transformation on empty template."""
-        processor = CloudFormationTemplateProcessor({})
-        processor.transform_cfn_tags()
-        assert processor.processed_template == {}
-
-    def test_transform_no_tags(self):
-        """Test transformation on template without any tags."""
-        template = {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": "my-static-bucket"}}}}
-        processor = CloudFormationTemplateProcessor(template)
-        processor.transform_cfn_tags()
-        assert processor.processed_template == template
-
-    def test_transform_mixed_tags_and_intrinsic_functions(self):
-        """Test transformation when template already has some intrinsic functions."""
-        template = {
-            "Resources": {
-                "MyBucket": {
-                    "Type": "AWS::S3::Bucket",
-                    "Properties": {
-                        "BucketName": RefTag("BucketParam"),
-                        "Tags": [
-                            {"Key": "Name", "Value": {"Ref": "NameParam"}},  # Already in intrinsic function format
-                            {"Key": "Env", "Value": RefTag("EnvParam")},  # Tag format
-                        ],
-                    },
-                }
-            }
-        }
-
-        expected = {
-            "Resources": {
-                "MyBucket": {
-                    "Type": "AWS::S3::Bucket",
-                    "Properties": {"BucketName": {"Ref": "BucketParam"}, "Tags": [{"Key": "Name", "Value": {"Ref": "NameParam"}}, {"Key": "Env", "Value": {"Ref": "EnvParam"}}]},
-                }
-            }
-        }
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.transform_cfn_tags()
-        assert processor.processed_template == expected
-
-    def test_transform_preserves_original_template(self):
-        """Test that transform_cfn_tags doesn't modify the original template."""
-        original_template = {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": RefTag("BucketParam")}}}}
-
-        # Create a copy to verify original isn't modified
-        template_copy = copy.deepcopy(original_template)
-
-        processor = CloudFormationTemplateProcessor(original_template)
-        processor.transform_cfn_tags()
-
-        # Original template should remain unchanged
-        assert original_template == template_copy
-        # Processed template should be transformed
-        assert processor.processed_template != original_template
-        assert processor.processed_template == {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": {"Ref": "BucketParam"}}}}}
-
-    def test_transform_with_lists_of_tags(self):
-        """Test transformation of lists containing tags."""
-        template = {
-            "Resources": {
-                "MySecurityGroup": {
-                    "Type": "AWS::EC2::SecurityGroup",
-                    "Properties": {
-                        "SecurityGroupIngress": [
-                            {"IpProtocol": "tcp", "FromPort": 80, "ToPort": 80, "SourceSecurityGroupId": RefTag("WebSecurityGroup")},
-                            {"IpProtocol": "tcp", "FromPort": 443, "ToPort": 443, "SourceSecurityGroupId": GetAttTag(["ALBSecurityGroup", "GroupId"])},
-                        ]
-                    },
-                }
-            }
-        }
-
-        expected = {
-            "Resources": {
-                "MySecurityGroup": {
-                    "Type": "AWS::EC2::SecurityGroup",
-                    "Properties": {
-                        "SecurityGroupIngress": [
-                            {"IpProtocol": "tcp", "FromPort": 80, "ToPort": 80, "SourceSecurityGroupId": {"Ref": "WebSecurityGroup"}},
-                            {"IpProtocol": "tcp", "FromPort": 443, "ToPort": 443, "SourceSecurityGroupId": {"Fn::GetAtt": ["ALBSecurityGroup", "GroupId"]}},
-                        ]
-                    },
-                }
-            }
-        }
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.transform_cfn_tags()
-        assert processor.processed_template == expected
-
-    def test_transform_all_sections(self):
-        """Test transformation across all CloudFormation template sections."""
-        template = {
-            "Parameters": {"BucketParam": {"Type": "String", "Default": "my-bucket"}},
-            "Conditions": {"IsProduction": {"Fn::Equals": [RefTag("Environment"), "prod"]}, "HasBucket": {"Fn::Not": [{"Fn::Equals": [RefTag("BucketParam"), ""]}]}},
-            "Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Condition": "HasBucket", "Properties": {"BucketName": RefTag("BucketParam")}}},
-            "Outputs": {"BucketArn": {"Condition": "HasBucket", "Value": GetAttTag(["MyBucket", "Arn"]), "Export": {"Name": SubTag(["${AWS::StackName}-bucket-arn"])}}},
-        }
-
-        expected = {
-            "Parameters": {"BucketParam": {"Type": "String", "Default": "my-bucket"}},
-            "Conditions": {"IsProduction": {"Fn::Equals": [{"Ref": "Environment"}, "prod"]}, "HasBucket": {"Fn::Not": [{"Fn::Equals": [{"Ref": "BucketParam"}, ""]}]}},
-            "Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Condition": "HasBucket", "Properties": {"BucketName": {"Ref": "BucketParam"}}}},
-            "Outputs": {"BucketArn": {"Condition": "HasBucket", "Value": {"Fn::GetAtt": ["MyBucket", "Arn"]}, "Export": {"Name": {"Fn::Sub": "${AWS::StackName}-bucket-arn"}}}},
-        }
-
-        processor = CloudFormationTemplateProcessor(template)
-        processor.transform_cfn_tags()
-        assert processor.processed_template == expected
-
-    def test_transform_getatt_dot_notation_with_nested_attributes(self):
-        """Test that GetAtt dot notation with nested attributes is correctly transformed."""
-        # Note: The GetAtt parser already converts dot notation to array format,
-        # so we test that the array format is preserved correctly
+class TestRemoveResource:
+    def test_remove_simple_resource(self):
+        """Test removing a simple resource with no dependencies."""
         yaml_content = """
         Resources:
-          MyTable:
-            Type: AWS::DynamoDB::Table
+          MyBucket:
+            Type: AWS::S3::Bucket
             Properties:
-              TableName: my-table
+              BucketName: my-bucket
+          MyFunction:
+            Type: AWS::Lambda::Function
+            Properties:
+              FunctionName: my-function
+        """
+        template = load_yaml(yaml_content)
+        processor = CloudFormationTemplateProcessor(template)
+
+        # Remove the bucket
+        processor.remove_resource("MyBucket")
+
+        # Verify bucket is removed
+        assert "MyBucket" not in processor.processed_template["Resources"]
+        assert "MyFunction" in processor.processed_template["Resources"]
+
+    def test_remove_resource_with_ref_dependencies(self):
+        """Test removing a resource that is referenced by other resources."""
+        yaml_content = """
+        Resources:
+          MyBucket:
+            Type: AWS::S3::Bucket
+            Properties:
+              BucketName: my-bucket
           MyFunction:
             Type: AWS::Lambda::Function
             Properties:
               Environment:
                 Variables:
-                  # These would be parsed from YAML as GetAttTag(["MyTable", "StreamArn"])
-                  STREAM_ARN: !GetAtt MyTable.StreamArn
-                  TABLE_ARN: !GetAtt MyTable.Arn
+                  BUCKET_NAME: !Ref MyBucket
         """
         template = load_yaml(yaml_content)
         processor = CloudFormationTemplateProcessor(template)
-        processor.transform_cfn_tags()
 
-        # Verify the transformation
-        env_vars = processor.processed_template["Resources"]["MyFunction"]["Properties"]["Environment"]["Variables"]
-        assert env_vars["STREAM_ARN"] == {"Fn::GetAtt": ["MyTable", "StreamArn"]}
-        assert env_vars["TABLE_ARN"] == {"Fn::GetAtt": ["MyTable", "Arn"]}
+        # Remove the bucket
+        processor.remove_resource("MyBucket")
 
+        # Verify bucket is removed and reference is cleaned up
+        assert "MyBucket" not in processor.processed_template["Resources"]
+        assert "MyFunction" in processor.processed_template["Resources"]
+        # The Environment.Variables should be empty or removed
+        func = processor.processed_template["Resources"]["MyFunction"]
+        assert "Properties" not in func or "Environment" not in func["Properties"] or "Variables" not in func["Properties"]["Environment"] or not func["Properties"]["Environment"]["Variables"]
 
-class TestResourceMap:
-    def test_resource_map_get_resource(self):
+    def test_remove_resource_with_getatt_dependencies(self):
+        """Test removing a resource that is referenced via GetAtt."""
         yaml_content = """
-    Resources:
-      MyBucket:
-        Type: AWS::S3::Bucket
-        Properties:
-          BucketName: my-bucket
-    """
+        Resources:
+          MyBucket:
+            Type: AWS::S3::Bucket
+            Properties:
+              BucketName: my-bucket
+          MyFunction:
+            Type: AWS::Lambda::Function
+            Properties:
+              Environment:
+                Variables:
+                  BUCKET_ARN: !GetAtt
+                    - MyBucket
+                    - Arn
+        """
         template = load_yaml(yaml_content)
         processor = CloudFormationTemplateProcessor(template)
-        resource_map = processor.load_resource_map()
 
-        my_bucket = resource_map.get_resource("MyBucket")
-        assert my_bucket
+        # Remove the bucket
+        processor.remove_resource("MyBucket")
 
-        assert my_bucket.physical_resource_id == "my-bucket"
+        # Verify bucket is removed and GetAtt reference is cleaned up
+        assert "MyBucket" not in processor.processed_template["Resources"]
+        assert "MyFunction" in processor.processed_template["Resources"]
+
+    def test_remove_resource_with_depends_on(self):
+        """Test removing a resource that is in DependsOn of other resources."""
+        yaml_content = """
+        Resources:
+          MyBucket:
+            Type: AWS::S3::Bucket
+            Properties:
+              BucketName: my-bucket
+          MyFunction:
+            Type: AWS::Lambda::Function
+            DependsOn: MyBucket
+            Properties:
+              FunctionName: my-function
+          MyFunction2:
+            Type: AWS::Lambda::Function
+            DependsOn:
+              - MyBucket
+              - MyFunction
+            Properties:
+              FunctionName: my-function-2
+        """
+        template = load_yaml(yaml_content)
+        processor = CloudFormationTemplateProcessor(template)
+
+        # Remove the bucket
+        processor.remove_resource("MyBucket")
+
+        # Verify bucket is removed and DependsOn is updated
+        assert "MyBucket" not in processor.processed_template["Resources"]
+        assert "MyFunction" in processor.processed_template["Resources"]
+        assert "MyFunction2" in processor.processed_template["Resources"]
+
+        # MyFunction should have no DependsOn
+        assert "DependsOn" not in processor.processed_template["Resources"]["MyFunction"]
+
+        # MyFunction2 should only depend on MyFunction
+        assert processor.processed_template["Resources"]["MyFunction2"]["DependsOn"] == ["MyFunction"]
+
+    def test_remove_resource_referenced_in_outputs(self):
+        """Test removing a resource that is referenced in Outputs."""
+        yaml_content = """
+        Resources:
+          MyBucket:
+            Type: AWS::S3::Bucket
+            Properties:
+              BucketName: my-bucket
+        Outputs:
+          BucketName:
+            Value: !Ref MyBucket
+          BucketArn:
+            Value: !GetAtt MyBucket.Arn
+        """
+        template = load_yaml(yaml_content)
+        processor = CloudFormationTemplateProcessor(template)
+
+        # Remove the bucket
+        processor.remove_resource("MyBucket")
+
+        # Verify bucket is removed and outputs are cleaned up
+        assert "MyBucket" not in processor.processed_template["Resources"]
+        assert not processor.processed_template["Outputs"]
+
+    def test_remove_serverless_function_event_references(self):
+        """Test removing a resource that is referenced in serverless function events."""
+        yaml_content = """
+        Resources:
+          MyApi:
+            Type: AWS::ApiGateway::RestApi
+            Properties:
+              Name: MyApi
+          MyFunction:
+            Type: AWS::Serverless::Function
+            Properties:
+              Handler: index.handler
+              Events:
+                ApiEvent:
+                  Type: Api
+                  Properties:
+                    RestApiId: !Ref MyApi
+                    Path: /test
+                    Method: GET
+                S3Event:
+                  Type: S3
+                  Properties:
+                    Bucket: my-bucket
+        """
+        template = load_yaml(yaml_content)
+        processor = CloudFormationTemplateProcessor(template)
+
+        # Remove the API
+        processor.remove_resource("MyApi")
+
+        # Verify API is removed and ApiEvent is removed
+        assert "MyApi" not in processor.processed_template["Resources"]
+        assert "MyFunction" in processor.processed_template["Resources"]
+
+        events = processor.processed_template["Resources"]["MyFunction"]["Properties"]["Events"]
+        assert "ApiEvent" not in events
+        assert "S3Event" in events
+
+    def test_remove_nonexistent_resource(self):
+        """Test removing a resource that doesn't exist."""
+        yaml_content = """
+        Resources:
+          MyBucket:
+            Type: AWS::S3::Bucket
+            Properties:
+              BucketName: my-bucket
+        """
+        template = load_yaml(yaml_content)
+        processor = CloudFormationTemplateProcessor(template)
+
+        # Try to remove non-existent resource
+        processor.remove_resource("NonExistentResource")
+
+        # Verify nothing changed
+        assert "MyBucket" in processor.processed_template["Resources"]
+        assert len(processor.processed_template["Resources"]) == 1
+
+    def test_remove_resource_no_auto_dependencies(self):
+        """Test removing a resource without auto-removing dependencies."""
+        yaml_content = """
+        Resources:
+          MyBucket:
+            Type: AWS::S3::Bucket
+            Properties:
+              BucketName: my-bucket
+          MyBucketPolicy:
+            Type: AWS::S3::BucketPolicy
+            Properties:
+              Bucket: !Ref MyBucket
+              PolicyDocument:
+                Statement:
+                  - Effect: Allow
+                    Principal: "*"
+                    Action: "s3:GetObject"
+                    Resource: !Sub "${MyBucket.Arn}/*"
+        """
+        template = load_yaml(yaml_content)
+        processor = CloudFormationTemplateProcessor(template)
+
+        # Remove the bucket without auto-removing dependencies
+        processor.remove_resource("MyBucket", auto_remove_dependencies=False)
+
+        # Verify bucket is removed but policy remains (though with broken references)
+        assert "MyBucket" not in processor.processed_template["Resources"]
+        assert "MyBucketPolicy" in processor.processed_template["Resources"]
+
+    def test_remove_resource_with_json_intrinsic_functions(self):
+        """Test removing a resource referenced with JSON-style intrinsic functions."""
+        template = {
+            "Resources": {
+                "MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": "my-bucket"}},
+                "MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Environment": {"Variables": {"BUCKET_NAME": {"Ref": "MyBucket"}, "BUCKET_ARN": {"Fn::GetAtt": ["MyBucket", "Arn"]}}}}},
+            }
+        }
+        processor = CloudFormationTemplateProcessor(template)
+
+        # Remove the bucket
+        processor.remove_resource("MyBucket")
+
+        # Verify bucket is removed and references are cleaned up
+        assert "MyBucket" not in processor.processed_template["Resources"]
+        assert "MyFunction" in processor.processed_template["Resources"]
+
+
+class TestRemoveDependencies:
+    def test_remove_circular_reference_island(self):
+        """Test removing a circular reference island (resources that only reference each other)."""
+        yaml_content = """
+        Resources:
+          # Main resource referenced by output
+          MainBucket:
+            Type: AWS::S3::Bucket
+            Properties:
+              BucketName: main-bucket
+          
+          # Circular reference island
+          IslandBucket1:
+            Type: AWS::S3::Bucket
+            Properties:
+              BucketName: !Ref IslandBucket2
+          IslandBucket2:
+            Type: AWS::S3::Bucket
+            Properties:
+              BucketName: island-bucket-2
+              Tags:
+                - Key: RelatedBucket
+                  Value: !Ref IslandBucket1
+                  
+        Outputs:
+          MainBucketName:
+            Value: !Ref MainBucket
+        """
+        template = load_yaml(yaml_content)
+        processor = CloudFormationTemplateProcessor(template)
+
+        # Remove circular dependencies
+        processor.remove_dependencies("")
+
+        # Verify the island is removed but main bucket remains
+        assert "MainBucket" in processor.processed_template["Resources"]
+        assert "IslandBucket1" not in processor.processed_template["Resources"]
+        assert "IslandBucket2" not in processor.processed_template["Resources"]
+
+    def test_remove_self_referencing_resource(self):
+        """Test removing a resource that references itself."""
+        yaml_content = """
+        Resources:
+          MainFunction:
+            Type: AWS::Lambda::Function
+            Properties:
+              FunctionName: main-function
+              
+          SelfReferencingFunction:
+            Type: AWS::Lambda::Function
+            Properties:
+              FunctionName: self-ref
+              Environment:
+                Variables:
+                  SELF_ARN: !GetAtt SelfReferencingFunction.Arn
+                  
+        Outputs:
+          MainFunctionArn:
+            Value: !GetAtt MainFunction.Arn
+        """
+        template = load_yaml(yaml_content)
+        processor = CloudFormationTemplateProcessor(template)
+
+        # Remove circular dependencies
+        processor.remove_dependencies("")
+
+        # Verify self-referencing resource is removed
+        assert "MainFunction" in processor.processed_template["Resources"]
+        assert "SelfReferencingFunction" not in processor.processed_template["Resources"]
+
+    def test_remove_complex_circular_island(self):
+        """Test removing a complex circular reference island with multiple resources."""
+        yaml_content = """
+        Resources:
+          # Externally referenced resources
+          MainApi:
+            Type: AWS::ApiGateway::RestApi
+            Properties:
+              Name: main-api
+              
+          # Complex circular island
+          IslandFunction1:
+            Type: AWS::Lambda::Function
+            Properties:
+              FunctionName: island-func-1
+              Environment:
+                Variables:
+                  ROLE_ARN: !GetAtt IslandRole.Arn
+                  
+          IslandFunction2:
+            Type: AWS::Lambda::Function
+            Properties:
+              FunctionName: island-func-2
+              Role: !GetAtt IslandRole.Arn
+              Environment:
+                Variables:
+                  FUNC1_ARN: !GetAtt IslandFunction1.Arn
+                  
+          IslandRole:
+            Type: AWS::IAM::Role
+            Properties:
+              RoleName: island-role
+              Policies:
+                - PolicyName: island-policy
+                  PolicyDocument:
+                    Statement:
+                      - Effect: Allow
+                        Action: lambda:InvokeFunction
+                        Resource: 
+                          - !GetAtt IslandFunction1.Arn
+                          - !GetAtt IslandFunction2.Arn
+                          
+        Outputs:
+          MainApiId:
+            Value: !Ref MainApi
+        """
+        template = load_yaml(yaml_content)
+        processor = CloudFormationTemplateProcessor(template)
+
+        # Remove circular dependencies
+        processor.remove_dependencies("")
+
+        # Verify the entire island is removed
+        assert "MainApi" in processor.processed_template["Resources"]
+        assert "IslandFunction1" not in processor.processed_template["Resources"]
+        assert "IslandFunction2" not in processor.processed_template["Resources"]
+        assert "IslandRole" not in processor.processed_template["Resources"]
+
+    def test_keep_resources_referenced_in_conditions(self):
+        """Test that resources referenced in conditions are not removed."""
+        yaml_content = """
+        Parameters:
+          Environment:
+            Type: String
+            Default: dev
+            
+        Conditions:
+          IsProd: !Equals [!Ref Environment, "prod"]
+          HasBucket: !Not [!Equals [!Ref ConditionalBucket, ""]]
+          
+        Resources:
+          ConditionalBucket:
+            Type: AWS::S3::Bucket
+            Condition: IsProd
+            Properties:
+              BucketName: conditional-bucket
+              
+          UnreferencedBucket:
+            Type: AWS::S3::Bucket
+            Properties:
+              BucketName: unreferenced-bucket
+        """
+        template = load_yaml(yaml_content)
+        processor = CloudFormationTemplateProcessor(template)
+
+        # Remove circular dependencies
+        processor.remove_dependencies("")
+
+        # Verify conditional bucket is kept (referenced in conditions)
+        assert "ConditionalBucket" in processor.processed_template["Resources"]
+        assert "UnreferencedBucket" not in processor.processed_template["Resources"]
+
+    def test_keep_resources_with_depends_on_external(self):
+        """Test that resources with DependsOn to external resources are kept."""
+        yaml_content = """
+        Resources:
+          MainResource:
+            Type: AWS::S3::Bucket
+            Properties:
+              BucketName: main-bucket
+              
+          DependentResource:
+            Type: AWS::S3::BucketPolicy
+            DependsOn: MainResource
+            Properties:
+              Bucket: dependent-bucket
+              PolicyDocument:
+                Statement: []
+                
+          IslandResource:
+            Type: AWS::S3::Bucket
+            Properties:
+              BucketName: island-bucket
+              
+        Outputs:
+          MainBucket:
+            Value: !Ref MainResource
+        """
+        template = load_yaml(yaml_content)
+        processor = CloudFormationTemplateProcessor(template)
+
+        # Remove circular dependencies
+        processor.remove_dependencies("")
+
+        # Verify dependent resource is kept
+        assert "MainResource" in processor.processed_template["Resources"]
+        assert "DependentResource" in processor.processed_template["Resources"]
+        assert "IslandResource" not in processor.processed_template["Resources"]
+
+    def test_no_resources_removed_when_all_referenced(self):
+        """Test that no resources are removed when all are externally referenced."""
+        yaml_content = """
+        Resources:
+          Bucket1:
+            Type: AWS::S3::Bucket
+            Properties:
+              BucketName: bucket-1
+              
+          Bucket2:
+            Type: AWS::S3::Bucket
+            Properties:
+              BucketName: bucket-2
+              Tags:
+                - Key: RelatedBucket
+                  Value: !Ref Bucket1
+                  
+        Outputs:
+          Bucket1Name:
+            Value: !Ref Bucket1
+          Bucket2Name:
+            Value: !Ref Bucket2
+        """
+        template = load_yaml(yaml_content)
+        processor = CloudFormationTemplateProcessor(template)
+
+        # Remove circular dependencies
+        processor.remove_dependencies("")
+
+        # Verify no resources are removed
+        assert "Bucket1" in processor.processed_template["Resources"]
+        assert "Bucket2" in processor.processed_template["Resources"]
+
+    def test_empty_template(self):
+        """Test remove_dependencies on empty template."""
+        processor = CloudFormationTemplateProcessor({})
+        processor.remove_dependencies("")
+
+        # Should not raise any errors
+        assert processor.processed_template == {}
+
+    def test_template_without_resources(self):
+        """Test remove_dependencies on template without Resources section."""
+        template = {"Parameters": {"Test": {"Type": "String"}}, "Outputs": {"TestOutput": {"Value": "test"}}}
+        processor = CloudFormationTemplateProcessor(template)
+        processor.remove_dependencies("")
+
+        # Should not modify the template
+        assert processor.processed_template == template
+
+
+class TestTransformCfnTags:
+    def test_transform_ref_tag(self):
+        """Test transforming !Ref tags to JSON intrinsic functions."""
+        yaml_content = """
+        Resources:
+          MyBucket:
+            Type: AWS::S3::Bucket
+            Properties:
+              BucketName: !Ref BucketNameParam
+        Outputs:
+          BucketRef:
+            Value: !Ref MyBucket
+        """
+        template = load_yaml(yaml_content)
+        processor = CloudFormationTemplateProcessor(template)
+
+        # Transform tags
+        processor.transform_cfn_tags()
+
+        # Verify Ref tags are transformed
+        bucket_props = processor.processed_template["Resources"]["MyBucket"]["Properties"]
+        assert isinstance(bucket_props["BucketName"], dict)
+        assert bucket_props["BucketName"] == {"Ref": "BucketNameParam"}
+
+        output_value = processor.processed_template["Outputs"]["BucketRef"]["Value"]
+        assert isinstance(output_value, dict)
+        assert output_value == {"Ref": "MyBucket"}
+
+    def test_transform_getatt_tag(self):
+        """Test transforming !GetAtt tags to JSON intrinsic functions."""
+        yaml_content = """
+        Resources:
+          MyFunction:
+            Type: AWS::Lambda::Function
+            Properties:
+              Environment:
+                Variables:
+                  BUCKET_ARN: !GetAtt
+                    - MyBucket
+                    - Arn
+                  ROLE_ARN: !GetAtt MyRole.Arn
+        """
+        template = load_yaml(yaml_content)
+        processor = CloudFormationTemplateProcessor(template)
+
+        # Transform tags
+        processor.transform_cfn_tags()
+
+        # Verify GetAtt tags are transformed
+        env_vars = processor.processed_template["Resources"]["MyFunction"]["Properties"]["Environment"]["Variables"]
+
+        # List format GetAtt
+        assert isinstance(env_vars["BUCKET_ARN"], dict)
+        assert env_vars["BUCKET_ARN"] == {"Fn::GetAtt": ["MyBucket", "Arn"]}
+
+        # String format GetAtt (should be converted to list)
+        assert isinstance(env_vars["ROLE_ARN"], dict)
+        assert env_vars["ROLE_ARN"] == {"Fn::GetAtt": ["MyRole", "Arn"]}
+
+    def test_transform_sub_tag(self):
+        """Test transforming !Sub tags to JSON intrinsic functions."""
+        yaml_content = """
+        Resources:
+          MyBucket:
+            Type: AWS::S3::Bucket
+            Properties:
+              BucketName: !Sub "my-bucket-${AWS::AccountId}"
+              Tags:
+                - Key: Name
+                  Value: !Sub
+                    - "${BucketPrefix}-bucket"
+                    - BucketPrefix: !Ref BucketPrefixParam
+        """
+        template = load_yaml(yaml_content)
+        processor = CloudFormationTemplateProcessor(template)
+
+        # Transform tags
+        processor.transform_cfn_tags()
+
+        # Verify Sub tags are transformed
+        bucket_props = processor.processed_template["Resources"]["MyBucket"]["Properties"]
+
+        # Simple Sub
+        assert isinstance(bucket_props["BucketName"], dict)
+        assert bucket_props["BucketName"] == {"Fn::Sub": "my-bucket-${AWS::AccountId}"}
+
+        # Sub with mapping
+        tag_value = bucket_props["Tags"][0]["Value"]
+        assert isinstance(tag_value, dict)
+        assert "Fn::Sub" in tag_value
+        assert isinstance(tag_value["Fn::Sub"], list)
+
+    def test_transform_join_tag(self):
+        """Test transforming !Join tags to JSON intrinsic functions."""
+        yaml_content = """
+        Resources:
+          MyBucket:
+            Type: AWS::S3::Bucket
+            Properties:
+              BucketName: !Join
+                - "-"
+                - - !Ref BucketPrefix
+                  - my-bucket
+                  - !Ref AWS::AccountId
+        """
+        template = load_yaml(yaml_content)
+        processor = CloudFormationTemplateProcessor(template)
+
+        # Transform tags
+        processor.transform_cfn_tags()
+
+        # Verify Join tag is transformed
+        bucket_name = processor.processed_template["Resources"]["MyBucket"]["Properties"]["BucketName"]
+        assert isinstance(bucket_name, dict)
+        assert "Fn::Join" in bucket_name
+        assert bucket_name["Fn::Join"][0] == "-"
+        assert isinstance(bucket_name["Fn::Join"][1], list)
+
+    def test_transform_multiple_tag_types(self):
+        """Test transforming multiple different tag types in one template."""
+        yaml_content = """
+        Resources:
+          MyFunction:
+            Type: AWS::Lambda::Function
+            Properties:
+              FunctionName: !Sub "${AWS::StackName}-function"
+              Role: !GetAtt MyRole.Arn
+              Environment:
+                Variables:
+                  BUCKET_NAME: !Ref MyBucket
+                  TABLE_NAME: !Join ["-", [!Ref TablePrefix, "table"]]
+                  BASE64_VALUE: !Base64 "Hello World"
+                  SELECTED_AZ: !Select [0, !GetAZs ""]
+        """
+        template = load_yaml(yaml_content)
+        processor = CloudFormationTemplateProcessor(template)
+
+        # Transform tags
+        processor.transform_cfn_tags()
+
+        # Verify all tags are transformed
+        props = processor.processed_template["Resources"]["MyFunction"]["Properties"]
+
+        assert props["FunctionName"] == {"Fn::Sub": "${AWS::StackName}-function"}
+        assert props["Role"] == {"Fn::GetAtt": ["MyRole", "Arn"]}
+
+        env_vars = props["Environment"]["Variables"]
+        assert env_vars["BUCKET_NAME"] == {"Ref": "MyBucket"}
+        assert env_vars["TABLE_NAME"]["Fn::Join"][0] == "-"
+        assert env_vars["BASE64_VALUE"] == {"Fn::Base64": "Hello World"}
+        assert env_vars["SELECTED_AZ"]["Fn::Select"][0] == 0
+
+    def test_transform_nested_tags(self):
+        """Test transforming deeply nested CloudFormation tags."""
+        yaml_content = """
+        Resources:
+          MyBucket:
+            Type: AWS::S3::Bucket
+            Properties:
+              BucketName: !Join
+                - ""
+                - - !Ref BucketPrefix
+                  - !Sub "-${AWS::Region}-"
+                  - !Select
+                    - 0
+                    - !Split
+                      - "-"
+                      - !Ref FullBucketName
+        """
+        template = load_yaml(yaml_content)
+        processor = CloudFormationTemplateProcessor(template)
+
+        # Transform tags
+        processor.transform_cfn_tags()
+
+        # Verify nested tags are all transformed
+        bucket_name = processor.processed_template["Resources"]["MyBucket"]["Properties"]["BucketName"]
+        assert isinstance(bucket_name, dict)
+        assert "Fn::Join" in bucket_name
+
+        # Check nested transformations
+        join_values = bucket_name["Fn::Join"][1]
+        assert isinstance(join_values[0], dict) and "Ref" in join_values[0]
+        assert isinstance(join_values[1], dict) and "Fn::Sub" in join_values[1]
+        assert isinstance(join_values[2], dict) and "Fn::Select" in join_values[2]
+
+    def test_transform_preserves_non_tag_values(self):
+        """Test that non-tag values are preserved during transformation."""
+        yaml_content = """
+        Resources:
+          MyBucket:
+            Type: AWS::S3::Bucket
+            Properties:
+              BucketName: !Ref BucketNameParam
+              VersioningConfiguration:
+                Status: Enabled
+              Tags:
+                - Key: Environment
+                  Value: Production
+                - Key: Owner
+                  Value: !Ref OwnerParam
+        """
+        template = load_yaml(yaml_content)
+        processor = CloudFormationTemplateProcessor(template)
+
+        # Transform tags
+        processor.transform_cfn_tags()
+
+        # Verify non-tag values are preserved
+        props = processor.processed_template["Resources"]["MyBucket"]["Properties"]
+        assert props["BucketName"] == {"Ref": "BucketNameParam"}
+        assert props["VersioningConfiguration"]["Status"] == "Enabled"
+        assert props["Tags"][0]["Value"] == "Production"
+        assert props["Tags"][1]["Value"] == {"Ref": "OwnerParam"}
+
+    def test_transform_empty_template(self):
+        """Test transforming empty template."""
+        processor = CloudFormationTemplateProcessor({})
+        processor.transform_cfn_tags()
+
+        assert processor.processed_template == {}
+
+    def test_transform_template_without_tags(self):
+        """Test transforming template with no CloudFormation tags."""
+        template = {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": "my-bucket"}}}}
+        processor = CloudFormationTemplateProcessor(template)
+        processor.transform_cfn_tags()
+
+        # Template should remain unchanged
+        assert processor.processed_template == template

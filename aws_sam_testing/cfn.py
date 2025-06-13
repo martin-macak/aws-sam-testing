@@ -3,354 +3,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
-
-def get_node_type_name(node: yaml.Node) -> str:
-    """Get a human-readable type name for a YAML node."""
-    if isinstance(node, yaml.ScalarNode):
-        return "scalar"
-    elif isinstance(node, yaml.SequenceNode):
-        return "sequence"
-    elif isinstance(node, yaml.MappingNode):
-        return "mapping"
-    else:
-        return "unknown"
-
-
-class ResourceMap:
-    """Provides access to loaded/inferred"""
-
-    def __init__(self, source: Any):
-        self.source = source
-
-    def get_resource(self, logical_id: str) -> Any:
-        if logical_id not in self.source.resources:
-            raise ValueError(f"Resource {logical_id} not found")
-
-        model = self.source[logical_id]
-        if not model:
-            raise ValueError(f"Resource {logical_id} not found")
-
-        return model
-
-
-class CloudFormationTag:
-    """Base class for CloudFormation tags."""
-
-    def __init__(self, value: Any):
-        self.value = value
-
-    def __eq__(self, other: Any) -> bool:
-        if not isinstance(other, self.__class__):
-            return False
-        return self.value == other.value
-
-    def __repr__(self) -> str:
-        return f"{self.__class__.__name__}({repr(self.value)})"
-
-
-class RefTag(CloudFormationTag):
-    """Represents !Ref tag."""
-
-    pass
-
-
-class GetAttTag(CloudFormationTag):
-    """Represents !GetAtt tag."""
-
-    pass
-
-
-class SubTag(CloudFormationTag):
-    """Represents !Sub tag."""
-
-    pass
-
-
-class JoinTag(CloudFormationTag):
-    """Represents !Join tag."""
-
-    pass
-
-
-class SplitTag(CloudFormationTag):
-    """Represents !Split tag."""
-
-    pass
-
-
-class SelectTag(CloudFormationTag):
-    """Represents !Select tag."""
-
-    pass
-
-
-class FindInMapTag(CloudFormationTag):
-    """Represents !FindInMap tag."""
-
-    pass
-
-
-class Base64Tag(CloudFormationTag):
-    """Represents !Base64 tag."""
-
-    pass
-
-
-class CidrTag(CloudFormationTag):
-    """Represents !Cidr tag."""
-
-    pass
-
-
-class ImportValueTag(CloudFormationTag):
-    """Represents !ImportValue tag."""
-
-    pass
-
-
-class GetAZsTag(CloudFormationTag):
-    """Represents !GetAZs tag."""
-
-    pass
-
-
-def construct_ref(loader: yaml.Loader, node: yaml.Node) -> RefTag:
-    """Construct !Ref tag."""
-    if not isinstance(node, yaml.ScalarNode):
-        raise yaml.constructor.ConstructorError(
-            None,
-            None,
-            "expected a scalar node, but found %s" % get_node_type_name(node),
-            node.start_mark,
-        )
-    value = loader.construct_scalar(node)
-    if value is None or value == "":
-        raise yaml.constructor.ConstructorError(None, None, "!Ref tag must not be empty", node.start_mark)
-    return RefTag(value)
-
-
-def construct_get_att(loader: yaml.Loader, node: yaml.Node) -> GetAttTag:
-    """Construct !GetAtt tag."""
-    if isinstance(node, yaml.SequenceNode):
-        # Array notation: !GetAtt [LogicalName, AttributeName]
-        value = loader.construct_sequence(node)
-        if len(value) != 2:
-            raise yaml.constructor.ConstructorError(
-                None,
-                None,
-                "expected 2 items in sequence, but found %d" % len(value),
-                node.start_mark,
-            )
-        return GetAttTag(value)
-    elif isinstance(node, yaml.ScalarNode):
-        # Dot notation: !GetAtt LogicalName.AttributeName
-        value = loader.construct_scalar(node)
-        if not value or "." not in value:
-            raise yaml.constructor.ConstructorError(
-                None,
-                None,
-                "!GetAtt scalar must be in format 'LogicalName.AttributeName'",
-                node.start_mark,
-            )
-        # Split only on the first dot to handle nested attributes
-        parts = value.split(".", 1)
-        return GetAttTag(parts)
-    else:
-        raise yaml.constructor.ConstructorError(
-            None,
-            None,
-            "expected a sequence or scalar node, but found %s" % get_node_type_name(node),
-            node.start_mark,
-        )
-
-
-def construct_sub(loader: yaml.Loader, node: yaml.Node) -> SubTag:
-    """Construct !Sub tag."""
-    if isinstance(node, yaml.ScalarNode):
-        value = loader.construct_scalar(node)
-        if value is None or value == "":
-            raise yaml.constructor.ConstructorError(None, None, "!Sub tag must not be empty", node.start_mark)
-        return SubTag([value])
-    elif isinstance(node, yaml.SequenceNode):
-        value = loader.construct_sequence(node)
-        if len(value) != 2:
-            raise yaml.constructor.ConstructorError(
-                None,
-                None,
-                "expected 2 items in sequence, but found %d" % len(value),
-                node.start_mark,
-            )
-        return SubTag(value)
-    else:
-        raise yaml.constructor.ConstructorError(
-            None,
-            None,
-            "expected a scalar or sequence node, but found %s" % get_node_type_name(node),
-            node.start_mark,
-        )
-
-
-def construct_join(loader: yaml.Loader, node: yaml.Node) -> JoinTag:
-    """Construct !Join tag."""
-    if not isinstance(node, yaml.SequenceNode):
-        raise yaml.constructor.ConstructorError(
-            None,
-            None,
-            "expected a sequence node, but found %s" % get_node_type_name(node),
-            node.start_mark,
-        )
-    value = loader.construct_sequence(node)
-    if len(value) != 2:
-        raise yaml.constructor.ConstructorError(
-            None,
-            None,
-            "expected 2 items in sequence, but found %d" % len(value),
-            node.start_mark,
-        )
-    return JoinTag(value)
-
-
-def construct_split(loader: yaml.Loader, node: yaml.Node) -> SplitTag:
-    """Construct !Split tag."""
-    if not isinstance(node, yaml.SequenceNode):
-        raise yaml.constructor.ConstructorError(
-            None,
-            None,
-            "expected a sequence node, but found %s" % get_node_type_name(node),
-            node.start_mark,
-        )
-    value = loader.construct_sequence(node)
-    if len(value) != 2:
-        raise yaml.constructor.ConstructorError(
-            None,
-            None,
-            "expected 2 items in sequence, but found %d" % len(value),
-            node.start_mark,
-        )
-    return SplitTag(value)
-
-
-def construct_select(loader: yaml.Loader, node: yaml.Node) -> SelectTag:
-    """Construct !Select tag."""
-    if not isinstance(node, yaml.SequenceNode):
-        raise yaml.constructor.ConstructorError(
-            None,
-            None,
-            "expected a sequence node, but found %s" % get_node_type_name(node),
-            node.start_mark,
-        )
-    value = loader.construct_sequence(node)
-    if len(value) != 2:
-        raise yaml.constructor.ConstructorError(
-            None,
-            None,
-            "expected 2 items in sequence, but found %d" % len(value),
-            node.start_mark,
-        )
-    if not isinstance(value[0], int):
-        raise yaml.constructor.ConstructorError(
-            None,
-            None,
-            "expected an integer index, but found %s" % type(value[0]).__name__,
-            node.start_mark,
-        )
-    return SelectTag(value)
-
-
-def construct_find_in_map(loader: yaml.Loader, node: yaml.Node) -> FindInMapTag:
-    """Construct !FindInMap tag."""
-    if not isinstance(node, yaml.SequenceNode):
-        raise yaml.constructor.ConstructorError(
-            None,
-            None,
-            "expected a sequence node, but found %s" % get_node_type_name(node),
-            node.start_mark,
-        )
-    value = loader.construct_sequence(node)
-    if len(value) != 3:
-        raise yaml.constructor.ConstructorError(
-            None,
-            None,
-            "expected 3 items in sequence, but found %d" % len(value),
-            node.start_mark,
-        )
-    return FindInMapTag(value)
-
-
-def construct_base64(loader: yaml.Loader, node: yaml.Node) -> Base64Tag:
-    """Construct !Base64 tag."""
-    if not isinstance(node, yaml.ScalarNode):
-        raise yaml.constructor.ConstructorError(
-            None,
-            None,
-            "expected a scalar node, but found %s" % get_node_type_name(node),
-            node.start_mark,
-        )
-    return Base64Tag(loader.construct_scalar(node))
-
-
-def construct_cidr(loader: yaml.Loader, node: yaml.Node) -> CidrTag:
-    """Construct !Cidr tag."""
-    if not isinstance(node, yaml.SequenceNode):
-        raise yaml.constructor.ConstructorError(
-            None,
-            None,
-            "expected a sequence node, but found %s" % get_node_type_name(node),
-            node.start_mark,
-        )
-    value = loader.construct_sequence(node)
-    if len(value) != 3:
-        raise yaml.constructor.ConstructorError(
-            None,
-            None,
-            "expected 3 items in sequence, but found %d" % len(value),
-            node.start_mark,
-        )
-    return CidrTag(value)
-
-
-def construct_import_value(loader: yaml.Loader, node: yaml.Node) -> ImportValueTag:
-    """Construct !ImportValue tag."""
-    if not isinstance(node, yaml.ScalarNode):
-        raise yaml.constructor.ConstructorError(
-            None,
-            None,
-            "expected a scalar node, but found %s" % get_node_type_name(node),
-            node.start_mark,
-        )
-    return ImportValueTag(loader.construct_scalar(node))
-
-
-def construct_get_azs(loader: yaml.Loader, node: yaml.Node) -> GetAZsTag:
-    """Construct !GetAZs tag."""
-    if not isinstance(node, yaml.ScalarNode):
-        raise yaml.constructor.ConstructorError(
-            None,
-            None,
-            "expected a scalar node, but found %s" % get_node_type_name(node),
-            node.start_mark,
-        )
-    return GetAZsTag(loader.construct_scalar(node))
-
-
-class CloudFormationLoader(yaml.SafeLoader):
-    """Custom YAML loader that supports CloudFormation tags."""
-
-    pass
-
-
-# Register CloudFormation tags
-CloudFormationLoader.add_constructor("!Ref", construct_ref)
-CloudFormationLoader.add_constructor("!GetAtt", construct_get_att)
-CloudFormationLoader.add_constructor("!Sub", construct_sub)
-CloudFormationLoader.add_constructor("!Join", construct_join)
-CloudFormationLoader.add_constructor("!Split", construct_split)
-CloudFormationLoader.add_constructor("!Select", construct_select)
-CloudFormationLoader.add_constructor("!FindInMap", construct_find_in_map)
-CloudFormationLoader.add_constructor("!Base64", construct_base64)
-CloudFormationLoader.add_constructor("!Cidr", construct_cidr)
-CloudFormationLoader.add_constructor("!ImportValue", construct_import_value)
-CloudFormationLoader.add_constructor("!GetAZs", construct_get_azs)
+from .cfn_tags import CloudFormationDumper, CloudFormationLoader
 
 
 def load_yaml(stream: str) -> Dict[str, Any]:
@@ -380,83 +33,6 @@ def load_yaml_file(file_path: str) -> Dict[str, Any]:
         return yaml.load(f, Loader=CloudFormationLoader)
 
 
-class CloudFormationDumper(yaml.SafeDumper):
-    """Custom YAML dumper that supports CloudFormation tags."""
-
-    pass
-
-
-def represent_ref(dumper: "CloudFormationDumper", data: RefTag) -> yaml.Node:
-    """Represent !Ref tag."""
-    return dumper.represent_scalar("!Ref", data.value)
-
-
-def represent_get_att(dumper: "CloudFormationDumper", data: GetAttTag) -> yaml.Node:
-    """Represent !GetAtt tag."""
-    return dumper.represent_scalar("!GetAtt", data.value)
-
-
-def represent_sub(dumper: "CloudFormationDumper", data: SubTag) -> yaml.Node:
-    """Represent !Sub tag."""
-    if isinstance(data.value, list):
-        return dumper.represent_sequence("!Sub", data.value)
-    return dumper.represent_scalar("!Sub", data.value)
-
-
-def represent_join(dumper: "CloudFormationDumper", data: JoinTag) -> yaml.Node:
-    """Represent !Join tag."""
-    return dumper.represent_sequence("!Join", data.value)
-
-
-def represent_split(dumper: "CloudFormationDumper", data: SplitTag) -> yaml.Node:
-    """Represent !Split tag."""
-    return dumper.represent_sequence("!Split", data.value)
-
-
-def represent_select(dumper: "CloudFormationDumper", data: SelectTag) -> yaml.Node:
-    """Represent !Select tag."""
-    return dumper.represent_sequence("!Select", data.value)
-
-
-def represent_find_in_map(dumper: "CloudFormationDumper", data: FindInMapTag) -> yaml.Node:
-    """Represent !FindInMap tag."""
-    return dumper.represent_sequence("!FindInMap", data.value)
-
-
-def represent_base64(dumper: "CloudFormationDumper", data: Base64Tag) -> yaml.Node:
-    """Represent !Base64 tag."""
-    return dumper.represent_scalar("!Base64", data.value)
-
-
-def represent_cidr(dumper: "CloudFormationDumper", data: CidrTag) -> yaml.Node:
-    """Represent !Cidr tag."""
-    return dumper.represent_sequence("!Cidr", data.value)
-
-
-def represent_import_value(dumper: "CloudFormationDumper", data: ImportValueTag) -> yaml.Node:
-    """Represent !ImportValue tag."""
-    return dumper.represent_scalar("!ImportValue", data.value)
-
-
-def represent_get_azs(dumper: "CloudFormationDumper", data: GetAZsTag) -> yaml.Node:
-    """Represent !GetAZs tag."""
-    return dumper.represent_scalar("!GetAZs", data.value)
-
-
-# Register CloudFormation tag representers
-CloudFormationDumper.add_representer(RefTag, represent_ref)
-CloudFormationDumper.add_representer(GetAttTag, represent_get_att)
-CloudFormationDumper.add_representer(SubTag, represent_sub)
-CloudFormationDumper.add_representer(JoinTag, represent_join)
-CloudFormationDumper.add_representer(SplitTag, represent_split)
-CloudFormationDumper.add_representer(SelectTag, represent_select)
-CloudFormationDumper.add_representer(FindInMapTag, represent_find_in_map)
-CloudFormationDumper.add_representer(Base64Tag, represent_base64)
-CloudFormationDumper.add_representer(CidrTag, represent_cidr)
-CloudFormationDumper.add_representer(ImportValueTag, represent_import_value)
-CloudFormationDumper.add_representer(GetAZsTag, represent_get_azs)
-
-
 def dump_yaml(data: Dict[str, Any], stream=None) -> Optional[str]:
     """
     Dump YAML content with CloudFormation tag support.
@@ -468,11 +44,42 @@ def dump_yaml(data: Dict[str, Any], stream=None) -> Optional[str]:
     Returns:
         YAML string if stream is None, otherwise None
     """
-    return yaml.dump(data, stream=stream, Dumper=CloudFormationDumper, default_flow_style=False, sort_keys=False)
+    return yaml.dump(
+        data,
+        stream=stream,
+        Dumper=CloudFormationDumper,
+        default_flow_style=False,
+        sort_keys=False,
+    )
+
+
+class ResourceMap:
+    """Provides access to loaded/inferred"""
+
+    def __init__(self, source: Any):
+        self.source = source
+
+    def get_resource(self, logical_id: str) -> Any:
+        if logical_id not in self.source.resources:
+            raise ValueError(f"Resource {logical_id} not found")
+
+        model = self.source[logical_id]
+        if not model:
+            raise ValueError(f"Resource {logical_id} not found")
+
+        return model
 
 
 class CloudFormationTemplateProcessor:
-    """Processor for CloudFormation templates that handles resource manipulation and dependency management."""
+    """
+    Processor for CloudFormation templates that handles resource manipulation and dependency management.
+
+    This class is used to process CloudFormation templates and manipulate resources within them.
+    It provides methods to find resources by type, remove resources, and manage dependencies.
+
+    The processor maintains a processed template that is a deep copy of the original template.
+    This allows for safe manipulation of the template without modifying the original.
+    """
 
     def __init__(self, template: dict[str, Any]):
         """
@@ -481,10 +88,16 @@ class CloudFormationTemplateProcessor:
         Args:
             template: The CloudFormation template dictionary to process
         """
-        self.template = template
-        self.processed_template = copy.deepcopy(template)
+        self.template: dict[str, Any] = template
+        self.processed_template: dict[str, Any] = copy.deepcopy(template)
 
     def reset(self):
+        """
+        Reset the processed template to the original template.
+
+        This method creates a deep copy of the original template and assigns it to the processed template.
+        This allows for safe manipulation of the template without modifying the original.
+        """
         self.processed_template = copy.deepcopy(self.template)
 
     def load_resource_map(
@@ -494,6 +107,18 @@ class CloudFormationTemplateProcessor:
         aws_account_id: Optional[str] = None,
         cross_stack_resources: Optional[Dict[str, Any]] = None,
     ) -> ResourceMap:
+        """
+        Loads a template and parses and resolves CloudFormation tags and intrinsic functions.
+
+        Args:
+            parameters: Optional parameters to pass to the template
+            tags: Optional tags to pass to the template
+            aws_account_id: Optional AWS account ID to use for the template
+            cross_stack_resources: Optional cross-stack resources to use for the template
+
+        Returns:
+            ResourceMap: A resource map that can be used to find resources by type, remove resources, and manage dependencies.
+        """
         from moto import mock_aws
         from moto.cloudformation.parsing import ResourceMap as MotoResourceMap
 
@@ -626,145 +251,6 @@ class CloudFormationTemplateProcessor:
 
         return (logical_id, resource_data)
 
-    def _find_resource_islands(self) -> List[set[str]]:
-        """
-        Find groups of resources that only reference each other (islands).
-        These are resources that form circular references or closed groups.
-
-        Returns:
-            List of sets, where each set contains resource names that form an island
-        """
-        if "Resources" not in self.processed_template:
-            return []
-
-        all_resources = set(self.processed_template["Resources"].keys())
-
-        # Build a reference graph
-        # references[A] = {B, C} means A references B and C
-        # referenced_by[A] = {B, C} means A is referenced by B and C
-        references = {}
-        referenced_by = {}
-
-        for res_name in all_resources:
-            references[res_name] = set()
-            referenced_by[res_name] = set()
-
-        # Build the graphs
-        for res_name, resource in self.processed_template["Resources"].items():
-            for other_res in all_resources:
-                if self._find_references_in_value(resource, other_res):
-                    references[res_name].add(other_res)
-                    referenced_by[other_res].add(res_name)
-
-        # Find resources referenced from outside Resources section
-        externally_referenced = set()
-        for res_name in all_resources:
-            if self._is_resource_referenced_outside_resources(res_name):
-                externally_referenced.add(res_name)
-
-        # Find circular reference groups (true islands)
-        # These are strongly connected components where no member is referenced from outside
-        islands = []
-
-        # Use Tarjan's algorithm to find strongly connected components
-        index_counter = [0]
-        stack = []
-        indices = {}
-        lowlinks = {}
-        on_stack = {}
-
-        def strongconnect(v):
-            indices[v] = index_counter[0]
-            lowlinks[v] = index_counter[0]
-            index_counter[0] += 1
-            stack.append(v)
-            on_stack[v] = True
-
-            # Consider successors of v
-            for w in references.get(v, set()):
-                if w not in indices:
-                    strongconnect(w)
-                    lowlinks[v] = min(lowlinks[v], lowlinks[w])
-                elif on_stack.get(w, False):
-                    lowlinks[v] = min(lowlinks[v], indices[w])
-
-            # If v is a root node, pop the stack and print an SCC
-            if lowlinks[v] == indices[v]:
-                scc = set()
-                while True:
-                    w = stack.pop()
-                    on_stack[w] = False
-                    scc.add(w)
-                    if w == v:
-                        break
-
-                # Check if this SCC is a true island
-                is_island = True
-
-                # Single-node SCCs are islands only if they self-reference
-                if len(scc) == 1:
-                    node = next(iter(scc))
-                    # Check if node references itself
-                    if node in references.get(node, set()):
-                        # It's a self-referencing node
-                        if node not in externally_referenced:
-                            islands.append(scc)
-                elif len(scc) > 1:  # Multi-node SCCs can be circular references
-                    # Check if any member is referenced from outside the SCC
-                    for node in scc:
-                        if node in externally_referenced:
-                            is_island = False
-                            break
-
-                        # Check references from other resources
-                        for ref_by in referenced_by.get(node, set()):
-                            if ref_by not in scc:
-                                is_island = False
-                                break
-
-                        if not is_island:
-                            break
-
-                    if is_island:
-                        islands.append(scc)
-
-        # Find all SCCs
-        for res_name in all_resources:
-            if res_name not in indices:
-                strongconnect(res_name)
-
-        return islands
-
-    def _is_resource_referenced_outside_resources(self, resource_name: str) -> bool:
-        """
-        Check if a resource is referenced outside the Resources section.
-
-        Args:
-            resource_name: The resource name to check
-
-        Returns:
-            True if the resource is referenced in Outputs, Conditions, etc.
-        """
-        # Check in Outputs section
-        if "Outputs" in self.processed_template:
-            for output in self.processed_template["Outputs"].values():
-                if self._find_references_in_value(output, resource_name):
-                    return True
-
-        # Check in Conditions section
-        if "Conditions" in self.processed_template:
-            for condition in self.processed_template["Conditions"].values():
-                if self._find_references_in_value(condition, resource_name):
-                    return True
-
-        # Check in Mappings section (unlikely but possible)
-        if "Mappings" in self.processed_template:
-            for mapping in self.processed_template["Mappings"].values():
-                if self._find_references_in_value(mapping, resource_name):
-                    return True
-
-        return False
-
     def remove_resource(
         self,
         resource_name: str,
@@ -772,6 +258,11 @@ class CloudFormationTemplateProcessor:
     ) -> "CloudFormationTemplateProcessor":
         """
         Remove a resource from the template.
+        It also removes all dependencies of the resource in the template.
+        This function also removes any events on all AWS::Serverless::Function resources that reference the removed resource.
+
+        Dependencies are removed only if auto_remove_dependencies is True.
+        Dependencies are removed recursively.
 
         Args:
             resource_name: The name of the resource to remove
@@ -781,160 +272,167 @@ class CloudFormationTemplateProcessor:
         Returns:
             Self for method chaining
         """
-        if "Resources" not in self.processed_template or resource_name not in self.processed_template["Resources"]:
+        if "Resources" not in self.processed_template:
             return self
 
-        # If auto_remove_dependencies is True, we need to track what the removed resource depends on
-        # before removing it
-        dependencies_to_check = set()
-        if auto_remove_dependencies:
-            # Find all resources that the resource being removed references
-            resource = self.processed_template["Resources"][resource_name]
-            for other_res in self.processed_template["Resources"]:
-                if other_res != resource_name and self._find_references_in_value(resource, other_res):
-                    dependencies_to_check.add(other_res)
+        if resource_name not in self.processed_template["Resources"]:
+            return self
+
+        # Remove events that reference this resource from serverless functions BEFORE removing references
+        self._remove_serverless_function_events_referencing_resource(resource_name)
 
         # Remove the resource
-        self.processed_template["Resources"].pop(resource_name)
+        del self.processed_template["Resources"][resource_name]
 
-        # Now check if any of the dependencies can be removed
-        if auto_remove_dependencies and dependencies_to_check:
-            # For each dependency, check if it's still needed
-            for dep in dependencies_to_check:
-                if dep in self.processed_template["Resources"] and not self._is_resource_referenced(dep):
-                    # This dependency is no longer referenced, remove it recursively
-                    self.remove_resource(dep, auto_remove_dependencies=True)
+        # Remove references from other resources
+        self._remove_references_to_resource(resource_name)
 
-        # Also check for circular references (islands) that can be removed
         if auto_remove_dependencies:
-            self.remove_dependencies(resource_name)
+            # Only remove dependencies that were actually dependent on the removed resource
+            # Don't remove arbitrary unreferenced resources
+            pass  # For now, let's not auto-remove unless specifically requested
 
         return self
 
-    def _find_references_in_value(self, value: Any, target_resource: str) -> bool:
-        """
-        Recursively find if a value contains references to the target resource.
+    def _remove_references_to_resource(self, resource_name: str):
+        """Remove all references to a resource from the template."""
 
-        Args:
-            value: The value to check (can be dict, list, scalar, or CloudFormation tag)
-            target_resource: The resource name to look for
+        def remove_refs_from_value(value):
+            """Recursively remove references from a value."""
+            if isinstance(value, dict):
+                # Handle Ref
+                if "Ref" in value and value["Ref"] == resource_name:
+                    return None
+                # Handle GetAtt
+                if "Fn::GetAtt" in value:
+                    if isinstance(value["Fn::GetAtt"], list) and len(value["Fn::GetAtt"]) > 0:
+                        if value["Fn::GetAtt"][0] == resource_name:
+                            return None
+                    elif isinstance(value["Fn::GetAtt"], str):
+                        if value["Fn::GetAtt"].startswith(resource_name + "."):
+                            return None
+                # Handle CloudFormation tag objects
+                if hasattr(value, "__class__") and hasattr(value, "data"):
+                    # Handle Ref tag
+                    if hasattr(value, "name") and value.name == "Ref" and value.data == resource_name:  # type: ignore[attr-defined]
+                        return None
+                    # Handle GetAtt tag
+                    if hasattr(value, "name") and value.name == "Fn::GetAtt":  # type: ignore[attr-defined]
+                        if isinstance(value.data, list) and len(value.data) > 0 and value.data[0] == resource_name:  # type: ignore[attr-defined]
+                            return None
+                        elif isinstance(value.data, str) and value.data.startswith(resource_name + "."):  # type: ignore[attr-defined]
+                            return None
+                # Recursively process dict values
+                new_dict = {}
+                for k, v in value.items():
+                    new_v = remove_refs_from_value(v)
+                    if new_v is not None:
+                        new_dict[k] = new_v
+                return new_dict
+            elif isinstance(value, list):
+                new_list = []
+                for item in value:
+                    new_item = remove_refs_from_value(item)
+                    if new_item is not None:
+                        new_list.append(new_item)
+                return new_list
+            # Handle CloudFormation tag objects at root level
+            elif hasattr(value, "__class__") and hasattr(value, "data"):
+                if hasattr(value, "name"):
+                    if value.name == "Ref" and value.data == resource_name:
+                        return None
+                    if value.name == "Fn::GetAtt":
+                        if isinstance(value.data, list) and len(value.data) > 0 and value.data[0] == resource_name:
+                            return None
+                        elif isinstance(value.data, str) and value.data.startswith(resource_name + "."):
+                            return None
+            return value
 
-        Returns:
-            True if the value contains a reference to the target resource
-        """
-        if isinstance(value, RefTag):
-            return value.value == target_resource
-        elif isinstance(value, GetAttTag):
-            return value.value[0] == target_resource
-        elif isinstance(value, SubTag):
-            # Check if resource is referenced in Sub string
-            if len(value.value) == 1:
-                # Simple string substitution
-                return f"${{{target_resource}}}" in value.value[0] or f"${{!{target_resource}}}" in value.value[0]
-            else:
-                # String with variable mapping
-                if f"${{{target_resource}}}" in value.value[0] or f"${{!{target_resource}}}" in value.value[0]:
-                    return True
-                # Check variable mapping
-                if isinstance(value.value[1], dict):
-                    return self._find_references_in_value(value.value[1], target_resource)
-        elif isinstance(value, (JoinTag, SplitTag, SelectTag, FindInMapTag, CidrTag)):
-            # These tags contain lists/sequences that might contain references
-            return self._find_references_in_value(value.value, target_resource)
-        elif isinstance(value, (Base64Tag, ImportValueTag, GetAZsTag)):
-            # These tags contain single values that might contain references
-            return self._find_references_in_value(value.value, target_resource)
-        elif isinstance(value, dict):
-            # Check Fn:: style functions
-            if "Ref" in value and value["Ref"] == target_resource:
-                return True
-            if "Fn::GetAtt" in value:
-                get_att_value = value["Fn::GetAtt"]
-                if isinstance(get_att_value, list) and len(get_att_value) > 0 and get_att_value[0] == target_resource:
-                    return True
-            if "Fn::Sub" in value:
-                sub_value = value["Fn::Sub"]
-                if isinstance(sub_value, str):
-                    return f"${{{target_resource}}}" in sub_value or f"${{!{target_resource}}}" in sub_value
-                elif isinstance(sub_value, list) and len(sub_value) > 0:
-                    return f"${{{target_resource}}}" in sub_value[0] or f"${{!{target_resource}}}" in sub_value[0]
-
-            # Recursively check all values in the dict
-            for v in value.values():
-                if self._find_references_in_value(v, target_resource):
-                    return True
-        elif isinstance(value, list):
-            # Recursively check all items in the list
-            for item in value:
-                if self._find_references_in_value(item, target_resource):
-                    return True
-        elif isinstance(value, str):
-            # Check for string references (unlikely but possible in some contexts)
-            return False
-
-        return False
-
-    def _get_resource_dependencies(self, resource_name: str) -> set[str]:
-        """
-        Get all resources that the given resource depends on.
-
-        Args:
-            resource_name: The resource to check dependencies for
-
-        Returns:
-            Set of resource names that this resource depends on
-        """
-        dependencies = set()
-
-        if "Resources" not in self.processed_template:
-            return dependencies
-
-        if resource_name not in self.processed_template["Resources"]:
-            return dependencies
-
-        resource = self.processed_template["Resources"][resource_name]
-
-        # Check all resources for references
-        for res_name in self.processed_template["Resources"]:
-            if res_name != resource_name and self._find_references_in_value(resource, res_name):
-                dependencies.add(res_name)
-
-        return dependencies
-
-    def _is_resource_referenced(self, resource_name: str) -> bool:
-        """
-        Check if a resource is referenced anywhere in the template.
-
-        Args:
-            resource_name: The resource name to check
-
-        Returns:
-            True if the resource is referenced anywhere
-        """
-        # Check in Resources section
+        # Process all resources
         if "Resources" in self.processed_template:
-            for res_name, resource in self.processed_template["Resources"].items():
-                if res_name != resource_name and self._find_references_in_value(resource, resource_name):
-                    return True
+            for logical_id, resource in self.processed_template["Resources"].items():
+                if isinstance(resource, dict):
+                    updated_resource = remove_refs_from_value(resource)
+                    if updated_resource is not None:
+                        self.processed_template["Resources"][logical_id] = updated_resource
 
-        # Check in Outputs section
+                        # Handle DependsOn specifically
+                        if "DependsOn" in updated_resource:
+                            depends_on = updated_resource["DependsOn"]  # type: ignore[index]
+                            if isinstance(depends_on, list):
+                                updated_resource["DependsOn"] = [dep for dep in depends_on if dep != resource_name]  # type: ignore[index]
+                                if not updated_resource["DependsOn"]:  # type: ignore[index]
+                                    del updated_resource["DependsOn"]  # type: ignore[misc]
+                            elif depends_on == resource_name:
+                                del updated_resource["DependsOn"]  # type: ignore[misc]
+
+        # Process Outputs
         if "Outputs" in self.processed_template:
-            for output in self.processed_template["Outputs"].values():
-                if self._find_references_in_value(output, resource_name):
-                    return True
+            outputs_to_remove = []
+            for output_name, output_value in self.processed_template["Outputs"].items():
+                if isinstance(output_value, dict):
+                    updated_output = remove_refs_from_value(output_value)
+                    if updated_output is None or updated_output == {} or (isinstance(updated_output.get("Value"), dict) and not updated_output["Value"]):  # type: ignore[union-attr]
+                        outputs_to_remove.append(output_name)
+                    else:
+                        self.processed_template["Outputs"][output_name] = updated_output
+            for output_name in outputs_to_remove:
+                del self.processed_template["Outputs"][output_name]
 
-        # Check in Conditions section
-        if "Conditions" in self.processed_template:
-            for condition in self.processed_template["Conditions"].values():
-                if self._find_references_in_value(condition, resource_name):
-                    return True
+    def _remove_serverless_function_events_referencing_resource(self, resource_name: str):
+        """Remove events from AWS::Serverless::Function resources that reference the removed resource."""
+        if "Resources" not in self.processed_template:
+            return
 
-        # Check in Mappings section (unlikely but possible)
-        if "Mappings" in self.processed_template:
-            for mapping in self.processed_template["Mappings"].values():
-                if self._find_references_in_value(mapping, resource_name):
-                    return True
+        for logical_id, resource in self.processed_template["Resources"].items():
+            if isinstance(resource, dict) and resource.get("Type") == "AWS::Serverless::Function":
+                if "Properties" in resource and "Events" in resource["Properties"]:
+                    events = resource["Properties"]["Events"]
+                    if isinstance(events, dict):
+                        events_to_remove = []
+                        for event_name, event_config in events.items():
+                            if self._event_references_resource(event_config, resource_name):
+                                events_to_remove.append(event_name)
 
+                        for event_name in events_to_remove:
+                            del events[event_name]
+
+                        if not events:
+                            del resource["Properties"]["Events"]
+
+    def _event_references_resource(self, event_config, resource_name: str) -> bool:
+        """Check if an event configuration references a specific resource."""
+        if isinstance(event_config, dict):
+            for value in event_config.values():
+                if isinstance(value, dict):
+                    # Check for Ref
+                    if "Ref" in value and value["Ref"] == resource_name:
+                        return True
+                    # Check for GetAtt
+                    if "Fn::GetAtt" in value:
+                        if isinstance(value["Fn::GetAtt"], list) and len(value["Fn::GetAtt"]) > 0:
+                            if value["Fn::GetAtt"][0] == resource_name:
+                                return True
+                        elif isinstance(value["Fn::GetAtt"], str):
+                            if value["Fn::GetAtt"].startswith(resource_name + "."):
+                                return True
+                    # Recursively check nested dicts
+                    if self._event_references_resource(value, resource_name):
+                        return True
+                # Handle CloudFormation tag objects
+                elif hasattr(value, "__class__") and hasattr(value, "data"):
+                    if hasattr(value, "name"):
+                        if value.name == "Ref" and value.data == resource_name:
+                            return True
+                        if value.name == "Fn::GetAtt":
+                            if isinstance(value.data, list) and len(value.data) > 0 and value.data[0] == resource_name:
+                                return True
+                            elif isinstance(value.data, str) and value.data.startswith(resource_name + "."):
+                                return True
+                elif isinstance(value, list):
+                    for item in value:
+                        if isinstance(item, dict) and self._event_references_resource(item, resource_name):
+                            return True
         return False
 
     def remove_dependencies(
@@ -948,20 +446,186 @@ class CloudFormationTemplateProcessor:
         each other and are not referenced from outside their group (circular reference islands).
         This includes self-referencing resources.
 
+        Dependencies are removed recursively.
+
         Args:
             resource_name: Not used - kept for backward compatibility
 
         Returns:
             Self for method chaining
         """
+        if "Resources" not in self.processed_template:
+            return self
 
-        islands = self._find_resource_islands()
-        for island in islands:
-            for resource_name in island:
-                if resource_name in self.processed_template["Resources"]:
-                    self.processed_template["Resources"].pop(resource_name)
+        # Build a graph of resource dependencies
+        dependency_graph = self._build_dependency_graph()
+
+        # Find all resources that are referenced by outputs, conditions, or parameters
+        externally_referenced = self._find_externally_referenced_resources()
+
+        # Find circular reference islands (groups of resources that only reference each other)
+        islands_to_remove = self._find_circular_reference_islands(dependency_graph, externally_referenced)
+
+        # Remove the islands
+        for resource in islands_to_remove:
+            if resource in self.processed_template["Resources"]:
+                del self.processed_template["Resources"][resource]
 
         return self
+
+    def _build_dependency_graph(self) -> Dict[str, set]:
+        """Build a graph of resource dependencies."""
+        graph = {}
+
+        if "Resources" not in self.processed_template:
+            return graph
+
+        # Initialize graph with all resources
+        for resource_name in self.processed_template["Resources"]:
+            graph[resource_name] = set()
+
+        # Build dependency relationships
+        for resource_name, resource in self.processed_template["Resources"].items():
+            if isinstance(resource, dict):
+                # Find all dependencies in this resource
+                dependencies = self._find_dependencies_in_value(resource)
+                graph[resource_name] = dependencies
+
+        return graph
+
+    def _find_dependencies_in_value(self, value) -> set:
+        """Find all resource references in a value."""
+        dependencies = set()
+
+        if isinstance(value, dict):
+            # Handle Ref
+            if "Ref" in value and isinstance(value["Ref"], str):
+                ref_value = value["Ref"]
+                if "Resources" in self.processed_template and ref_value in self.processed_template["Resources"]:
+                    dependencies.add(ref_value)
+            # Handle GetAtt
+            if "Fn::GetAtt" in value:
+                if isinstance(value["Fn::GetAtt"], list) and len(value["Fn::GetAtt"]) > 0:
+                    resource_ref = value["Fn::GetAtt"][0]
+                    if "Resources" in self.processed_template and resource_ref in self.processed_template["Resources"]:
+                        dependencies.add(resource_ref)
+                elif isinstance(value["Fn::GetAtt"], str):
+                    resource_ref = value["Fn::GetAtt"].split(".")[0]
+                    if "Resources" in self.processed_template and resource_ref in self.processed_template["Resources"]:
+                        dependencies.add(resource_ref)
+            # Handle DependsOn
+            if "DependsOn" in value:
+                depends_on = value["DependsOn"]
+                if isinstance(depends_on, list):
+                    for dep in depends_on:
+                        if isinstance(dep, str) and dep in self.processed_template.get("Resources", {}):
+                            dependencies.add(dep)
+                elif isinstance(depends_on, str) and depends_on in self.processed_template.get("Resources", {}):
+                    dependencies.add(depends_on)
+            # Recursively process dict values
+            for v in value.values():
+                dependencies.update(self._find_dependencies_in_value(v))
+        elif isinstance(value, list):
+            for item in value:
+                dependencies.update(self._find_dependencies_in_value(item))
+        # Handle CloudFormation tag objects
+        elif hasattr(value, "__class__") and hasattr(value, "data") and hasattr(value, "name"):
+            if value.name == "Ref" and isinstance(value.data, str):
+                if "Resources" in self.processed_template and value.data in self.processed_template["Resources"]:
+                    dependencies.add(value.data)
+            elif value.name == "Fn::GetAtt":
+                if isinstance(value.data, list) and len(value.data) > 0:
+                    resource_ref = value.data[0]
+                    if "Resources" in self.processed_template and resource_ref in self.processed_template["Resources"]:
+                        dependencies.add(resource_ref)
+                elif isinstance(value.data, str):
+                    resource_ref = value.data.split(".")[0]
+                    if "Resources" in self.processed_template and resource_ref in self.processed_template["Resources"]:
+                        dependencies.add(resource_ref)
+            # For other CloudFormation functions, recursively check their data
+            if hasattr(value, "data"):
+                dependencies.update(self._find_dependencies_in_value(value.data))
+
+        return dependencies
+
+    def _find_externally_referenced_resources(self) -> set:
+        """Find resources that are referenced from outputs, conditions, or parameters."""
+        externally_referenced = set()
+
+        # Check outputs
+        if "Outputs" in self.processed_template:
+            for output_value in self.processed_template["Outputs"].values():
+                if isinstance(output_value, dict):
+                    externally_referenced.update(self._find_dependencies_in_value(output_value))
+
+        # Check conditions
+        if "Conditions" in self.processed_template:
+            for condition_value in self.processed_template["Conditions"].values():
+                externally_referenced.update(self._find_dependencies_in_value(condition_value))
+
+        # Check parameters (for default values that might reference resources)
+        if "Parameters" in self.processed_template:
+            for param_value in self.processed_template["Parameters"].values():
+                if isinstance(param_value, dict):
+                    externally_referenced.update(self._find_dependencies_in_value(param_value))
+
+        return externally_referenced
+
+    def _find_circular_reference_islands(self, dependency_graph: Dict[str, set], externally_referenced: set) -> set:
+        """Find circular reference islands - groups of resources that only reference each other."""
+        islands_to_remove = set()
+        visited = set()
+
+        def find_connected_component(start_resource: str) -> set:
+            """Find all resources connected to the start resource."""
+            component = set()
+            to_visit = {start_resource}
+
+            while to_visit:
+                current = to_visit.pop()
+                if current in component:
+                    continue
+
+                component.add(current)
+
+                # Add resources that this resource depends on
+                if current in dependency_graph:
+                    to_visit.update(dependency_graph[current])
+
+                # Add resources that depend on this resource
+                for resource, deps in dependency_graph.items():
+                    if current in deps:
+                        to_visit.add(resource)
+
+            return component
+
+        # Find all connected components
+        for resource in dependency_graph:
+            if resource not in visited:
+                component = find_connected_component(resource)
+                visited.update(component)
+
+                # Check if this component is an island (not referenced externally)
+                is_island = True
+                for comp_resource in component:
+                    if comp_resource in externally_referenced:
+                        is_island = False
+                        break
+
+                    # Check if any external resource depends on this component resource
+                    for external_resource in dependency_graph:
+                        if external_resource not in component:
+                            if comp_resource in dependency_graph.get(external_resource, set()):
+                                is_island = False
+                                break
+
+                    if not is_island:
+                        break
+
+                if is_island:
+                    islands_to_remove.update(component)
+
+        return islands_to_remove
 
     def transform_cfn_tags(self) -> "CloudFormationTemplateProcessor":
         """
@@ -983,73 +647,37 @@ class CloudFormationTemplateProcessor:
         Returns:
             CloudFormationTemplateProcessor: Self for method chaining
         """
-        self.processed_template = self._transform_tags_in_value(self.processed_template)
-        return self
 
-    def _transform_tags_in_value(self, value: Any) -> Any:
-        """
-        Recursively transform CloudFormation tags to intrinsic functions.
+        def transform_value(value):
+            """Recursively transform CloudFormation tag objects to JSON intrinsic functions."""
+            # Import CloudFormationObject here to avoid circular imports
+            from .cfn_tags import CloudFormationObject
 
-        Args:
-            value: The value to transform (can be dict, list, scalar, or CloudFormation tag)
+            # Check if this is a CloudFormation tag object
+            if isinstance(value, CloudFormationObject):
+                # Transform the data first, then create the JSON structure
+                transformed_data = transform_value(value.data)
 
-        Returns:
-            The transformed value with tags replaced by intrinsic functions
-        """
-        if isinstance(value, RefTag):
-            return {"Ref": value.value}
-        elif isinstance(value, GetAttTag):
-            # GetAttTag always stores value as a list [logical_id, attribute]
-            return {"Fn::GetAtt": value.value}
-        elif isinstance(value, SubTag):
-            # SubTag stores value as a list with 1 or 2 elements
-            if len(value.value) == 1:
-                return {"Fn::Sub": value.value[0]}
+                # Handle special cases from original to_json() method
+                name = value.name
+                if name == "Fn::GetAtt" and isinstance(transformed_data, str):
+                    transformed_data = transformed_data.split(".")
+                elif name == "Ref" and isinstance(transformed_data, str) and "." in transformed_data:
+                    name = "Fn::GetAtt"
+                    transformed_data = transformed_data.split(".")
+
+                return {name: transformed_data}
+            elif isinstance(value, dict):
+                # Recursively transform dict values
+                return {k: transform_value(v) for k, v in value.items()}
+            elif isinstance(value, list):
+                # Recursively transform list items
+                return [transform_value(item) for item in value]
             else:
-                # Transform any tags in the variable mapping
-                transformed_mapping = self._transform_tags_in_value(value.value[1])
-                return {"Fn::Sub": [value.value[0], transformed_mapping]}
-        elif isinstance(value, JoinTag):
-            # Transform any tags in the values to join
-            delimiter = value.value[0]
-            values = self._transform_tags_in_value(value.value[1])
-            return {"Fn::Join": [delimiter, values]}
-        elif isinstance(value, SplitTag):
-            # Transform any tags in the string to split
-            delimiter = value.value[0]
-            string = self._transform_tags_in_value(value.value[1])
-            return {"Fn::Split": [delimiter, string]}
-        elif isinstance(value, SelectTag):
-            # Transform any tags in the array
-            index = value.value[0]
-            array = self._transform_tags_in_value(value.value[1])
-            return {"Fn::Select": [index, array]}
-        elif isinstance(value, FindInMapTag):
-            # Transform any tags in the parameters
-            transformed_params = [self._transform_tags_in_value(param) for param in value.value]
-            return {"Fn::FindInMap": transformed_params}
-        elif isinstance(value, Base64Tag):
-            # Transform any tags in the value to encode
-            transformed_value = self._transform_tags_in_value(value.value)
-            return {"Fn::Base64": transformed_value}
-        elif isinstance(value, CidrTag):
-            # Transform any tags in the parameters
-            transformed_params = [self._transform_tags_in_value(param) for param in value.value]
-            return {"Fn::Cidr": transformed_params}
-        elif isinstance(value, ImportValueTag):
-            # Transform any tags in the value
-            transformed_value = self._transform_tags_in_value(value.value)
-            return {"Fn::ImportValue": transformed_value}
-        elif isinstance(value, GetAZsTag):
-            # Transform any tags in the region
-            transformed_region = self._transform_tags_in_value(value.value)
-            return {"Fn::GetAZs": transformed_region}
-        elif isinstance(value, dict):
-            # Recursively transform all values in the dict
-            return {k: self._transform_tags_in_value(v) for k, v in value.items()}
-        elif isinstance(value, list):
-            # Recursively transform all items in the list
-            return [self._transform_tags_in_value(item) for item in value]
-        else:
-            # Return scalar values as-is
-            return value
+                # Return primitive values as-is
+                return value
+
+        # Transform the entire template
+        self.processed_template = transform_value(self.processed_template)  # type: ignore[assignment]
+
+        return self
