@@ -6,7 +6,6 @@ class TestMotoServer:
 
         with MotoServer() as moto_server:
             assert moto_server.is_running
-            moto_server.start()
             moto_server.wait_for_start()
 
             s3 = boto3.client("s3", endpoint_url=f"http://127.0.0.1:{moto_server.port}")
@@ -17,3 +16,40 @@ class TestMotoServer:
 
             moto_server.stop()
             assert not moto_server.is_running
+
+    def test_moto_server_with_resource_map(self):
+        import boto3
+        from moto.cloudformation.parsing import ResourceMap
+
+        from aws_sam_testing.cfn import load_yaml
+        from aws_sam_testing.moto_server import MotoServer
+
+        template_str = """
+Resources:
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: test-bucket
+        """
+
+        template = load_yaml(template_str)
+
+        with MotoServer() as moto_server:
+            moto_server.wait_for_start()
+
+            resource_map = ResourceMap(
+                stack_id="test-stack",
+                stack_name="test-stack",
+                parameters={},
+                tags={},
+                region_name="eu-west-1",
+                account_id="123456789012",
+                template=template,
+                cross_stack_resources={},
+            )
+            resource_map.load()
+            resource_map.create(template)
+
+            s3 = boto3.client("s3", endpoint_url=f"http://127.0.0.1:{moto_server.port}")
+            list_buckets = s3.list_buckets()
+            assert len(list_buckets["Buckets"]) == 1
