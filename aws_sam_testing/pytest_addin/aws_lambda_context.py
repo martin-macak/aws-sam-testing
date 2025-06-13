@@ -20,7 +20,7 @@ class AWSLambdaContext:
 
 
 @pytest.fixture
-def mock_aws_lambda_context() -> AWSLambdaContext:
+def mock_aws_lambda_context(aws_region) -> AWSLambdaContext:
     """Procides mocked AWS Lambda context for testing
 
     Returns:
@@ -29,7 +29,7 @@ def mock_aws_lambda_context() -> AWSLambdaContext:
     return AWSLambdaContext(
         function_name="test-function",
         function_version="$LATEST",
-        invoked_function_arn="arn:aws:lambda:us-east-1:123456789012:function:test-function",
+        invoked_function_arn=f"arn:aws:lambda:{aws_region}:123456789012:function:test-function",
         memory_limit_in_mb=128,
         aws_request_id="1234567890",
         log_group_name="/aws/lambda/test-function",

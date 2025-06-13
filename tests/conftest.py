@@ -1,16 +1,21 @@
+import os
+
 import pytest
 
 
-@pytest.fixture(scope="function", autouse=True)
-def isolated_aws(monkeypatch):
-    import os
+@pytest.fixture
+def aws_region():
+    region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "fake-default-region"
+    yield region
 
+
+@pytest.fixture(scope="function", autouse=True)
+def isolated_aws(monkeypatch, aws_region):
     from moto import mock_aws
 
-    region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
-
-    monkeypatch.setenv("AWS_REGION", region)
-    monkeypatch.setenv("AWS_DEFAULT_REGION", region)
+    monkeypatch.setenv("MOTO_ALLOW_NONEXISTENT_REGION", "true")
+    monkeypatch.setenv("AWS_REGION", aws_region)
+    monkeypatch.setenv("AWS_DEFAULT_REGION", aws_region)
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test")
     monkeypatch.setenv("AWS_SESSION_TOKEN", "test")
@@ -24,7 +29,7 @@ def isolated_aws(monkeypatch):
             aws_access_key_id="test",
             aws_secret_access_key="test",
             aws_session_token="test",
-            region_name=region,
+            region_name=aws_region,
         )
 
         yield session

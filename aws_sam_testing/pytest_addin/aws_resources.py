@@ -14,6 +14,7 @@ class ResourceManager:
         working_dir: Path | None,
         template_name: str = "template.yaml",
         template: dict | None = None,
+        region_name: str | None = None,
     ):
         from aws_sam_testing.aws_resources import AWSResourceManager
         from aws_sam_testing.cfn import load_yaml_file
@@ -33,6 +34,7 @@ class ResourceManager:
         self.manager = AWSResourceManager(
             session=session,
             template=self.template,
+            region_name=region_name,
         )
 
     def __enter__(self):
@@ -80,6 +82,7 @@ class ResourceManager:
 def mock_aws_resources(
     request,
     mock_aws_session: boto3.Session,
+    aws_region,
 ) -> Generator[ResourceManager, None, None]:
     working_dir = Path(request.node.fspath.dirname)
     assert working_dir.exists()
@@ -87,5 +90,6 @@ def mock_aws_resources(
     with ResourceManager(
         session=mock_aws_session,
         working_dir=working_dir,
+        region_name=aws_region,
     ) as manager:
         yield manager

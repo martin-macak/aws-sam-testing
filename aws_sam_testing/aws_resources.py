@@ -1,4 +1,5 @@
 import json
+import os
 from contextlib import contextmanager
 
 import boto3
@@ -20,7 +21,7 @@ class AWSResourceManager:
         template: CloudFormation template dictionary containing resource definitions.
         stack_id: Unique identifier for the CloudFormation stack. Defaults to "stack-123".
         stack_name: Human-readable name for the stack. Defaults to "my-stack".
-        region_name: AWS region where resources will be created. Defaults to "eu-west-1".
+        region_name: AWS region where resources will be created. Defaults to AWS_REGION environment variable.
         account_id: AWS account ID for resource creation. Defaults to "123456789012".
         parameters: CloudFormation template parameters as key-value pairs. Defaults to empty dict.
         tags: Resource tags as key-value pairs. Defaults to empty dict.
@@ -58,7 +59,7 @@ class AWSResourceManager:
         template: dict,
         stack_id: str = "stack-123",
         stack_name: str = "my-stack",
-        region_name: str = "eu-west-1",
+        region_name: str | None = None,
         account_id: str = "123456789012",
         parameters: dict = {},
         tags: dict = {},
@@ -73,7 +74,7 @@ class AWSResourceManager:
         self.packaging_bucket_name = f"aws-mocks-sam-bucket-{uuid.uuid4()}"
         self.stack_id = stack_id
         self.stack_name = stack_name
-        self.region_name = region_name
+        self.region_name = region_name or os.environ["AWS_REGION"]
         self.account_id = account_id
         self.parameters = parameters
         self.tags = tags
@@ -226,9 +227,10 @@ class AWSResourceManager:
                 raise e
 
         try:
+            params = {} if self.region_name == "us-east-1" else {"CreateBucketConfiguration": {"LocationConstraint": self.region_name}}
             s3.create_bucket(
                 Bucket=self.packaging_bucket_name,
-                CreateBucketConfiguration={"LocationConstraint": self.region_name},  # type: ignore
+                **params,  # type: ignore
             )
         except Exception as e:
             if "BucketAlreadyExists" in str(e):
