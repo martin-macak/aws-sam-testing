@@ -26,6 +26,10 @@ test-examples:
 		uv --directory $$example run --active pytest -s tests/; \
 	done
 
+test-in-docker:
+	docker build -t aws-sam-testing:test -f test_in_docker/Dockerfile test_in_docker/
+	docker run -v $(PWD):/app-src aws-sam-testing:test
+
 pyright:
 	uv run pyright
 
