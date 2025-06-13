@@ -372,7 +372,7 @@ class AWSSAMToolkit(CloudFormationTool):
                             skip_pull_image=False,
                             log_file=str(log_file),
                             aws_region=os.environ.get("AWS_REGION", "eu-west-1"),
-                            aws_profile=os.environ.get("AWS_PROFILE", "default"),
+                            aws_profile=os.environ.get("AWS_PROFILE"),
                             warm_container_initialization_mode="EAGER",
                         )
 
