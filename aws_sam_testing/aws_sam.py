@@ -31,6 +31,7 @@ class IsolationLevel(Enum):
     """
 
     NONE = "none"
+    MOTO = "moto"
 
 
 class LocalApi:
@@ -295,6 +296,8 @@ class AWSSAMToolkit(CloudFormationTool):
         if host is not None and not host.strip():
             raise ValueError("Host cannot be empty")
 
+        # docker_client = docker.from_env()
+
         cfn_processor = CloudFormationTemplateProcessor(self.template)
 
         # Find API resources
@@ -354,34 +357,39 @@ class AWSSAMToolkit(CloudFormationTool):
 
                 log_file = Path(self.working_dir) / ".aws-sam" / "aws-sam-testing-build" / f"api-stack-{api_logical_id}" / "log.txt"
 
-                invoke_ctx = InvokeContext(
-                    template_file=str(api_stack_build_dir / "template.yaml"),
-                    function_identifier=None,
-                    env_vars_file=None,
-                    docker_volume_basedir=str(api_stack_build_dir),
-                    docker_network=None,
-                    container_host_interface="127.0.0.1",
-                    container_host="localhost",
-                    layer_cache_basedir=str(api_stack_build_dir),
-                    force_image_build=False,
-                    skip_pull_image=False,
-                    log_file=str(log_file),
-                    aws_region=os.environ.get("AWS_REGION", "eu-west-1"),
-                    aws_profile=os.environ.get("AWS_PROFILE", "default"),
-                    warm_container_initialization_mode="EAGER",
-                )
+                match isolation_level:
+                    case IsolationLevel.NONE:
+                        invoke_ctx = InvokeContext(
+                            template_file=str(api_stack_build_dir / "template.yaml"),
+                            function_identifier=None,
+                            env_vars_file=None,
+                            docker_volume_basedir=str(api_stack_build_dir),
+                            docker_network=None,
+                            container_host_interface="127.0.0.1",
+                            container_host="localhost",
+                            layer_cache_basedir=str(api_stack_build_dir),
+                            force_image_build=False,
+                            skip_pull_image=False,
+                            log_file=str(log_file),
+                            aws_region=os.environ.get("AWS_REGION", "eu-west-1"),
+                            aws_profile=os.environ.get("AWS_PROFILE", "default"),
+                            warm_container_initialization_mode="EAGER",
+                        )
 
-                # Run the API locally.
-                local_api = LocalApi(
-                    ctx=invoke_ctx,
-                    toolkit=self,
-                    api_logical_id=api_logical_id,
-                    api_data=api_data,
-                    parameters=parameters,
-                    isolation_level=isolation_level,
-                    port=port,
-                    host=host,
-                )
+                        # Run the API locally.
+                        local_api = LocalApi(
+                            ctx=invoke_ctx,
+                            toolkit=self,
+                            api_logical_id=api_logical_id,
+                            api_data=api_data,
+                            parameters=parameters,
+                            isolation_level=isolation_level,
+                            port=port,
+                            host=host,
+                        )
+                    case IsolationLevel.MOTO:
+                        raise ValueError(f"Unsupported isolation level: {isolation_level}")
+
             finally:
                 # Remove the temporary template
                 api_stack_template_path.unlink(missing_ok=True)
@@ -393,3 +401,26 @@ class AWSSAMToolkit(CloudFormationTool):
             resources = [stack.enter_context(api_handler) for api_handler in api_handlers]
 
             yield resources
+
+
+class MotoInvokeContext(InvokeContext):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.moto_server = None
+
+    def __enter__(self):
+        super().__enter__()
+        self._start_moto_server()
+        return self
+
+    def __exit__(self, *args):
+        try:
+            self._stop_moto_server()
+        finally:
+            super().__exit__(*args)
+
+    def _start_moto_server(self):
+        pass
+
+    def _stop_moto_server(self):
+        pass
