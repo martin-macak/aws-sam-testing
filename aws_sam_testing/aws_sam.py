@@ -97,6 +97,35 @@ class LocalApi:
 
         self.is_running = True
 
+    def wait_for_api_to_be_ready(self) -> None:
+        import socket
+        import time
+
+        max_retries = 20
+        retry_count = 0
+        connected = False
+
+        while retry_count < max_retries and not connected:
+            sock = None
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                result = sock.connect_ex((self.host, self.port))
+                if result == 0:
+                    connected = True
+                    sock.close()
+                    break
+            except Exception:
+                pass
+            finally:
+                if sock is not None:
+                    sock.close()
+
+            retry_count += 1
+            time.sleep(1)
+
+        if not connected:
+            raise RuntimeError(f"Failed to connect to local API at http://{self.host}:{self.port}")
+
     def _start_local_api(self) -> None:
         import os
         from tempfile import TemporaryDirectory

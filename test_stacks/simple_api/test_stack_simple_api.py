@@ -19,8 +19,6 @@ def test_build_with_toolkit():
 
 
 def test_run_local_api():
-    import socket
-    import time
     from pathlib import Path
 
     import requests
@@ -45,27 +43,7 @@ def test_run_local_api():
             assert api.port is not None
             assert api.host is not None
 
-            # Try to connect to the API in a loop with max 10 retries
-            max_retries = 20
-            retry_count = 0
-            connected = False
-
-            while retry_count < max_retries and not connected:
-                try:
-                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    result = sock.connect_ex((api.host, api.port))
-                    if result == 0:
-                        connected = True
-                        sock.close()
-                        break
-                    sock.close()
-                except Exception:
-                    pass
-
-                retry_count += 1
-                time.sleep(1)
-
-            assert connected, f"Failed to connect to {api.host}:{api.port} after {max_retries} attempts"
+            api.wait_for_api_to_be_ready()
 
             for api in apis:
                 assert api.is_running
