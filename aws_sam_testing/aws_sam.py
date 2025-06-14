@@ -332,6 +332,22 @@ class AWSSAMToolkit(CloudFormationTool):
             resource_map.load()
             resource_map.create(self.template)
 
+            # I am not sure if setting this as env var using SAM CLI toolkit works, check tests/third_party/test_sam_cli.py
+            # I was not able to see env vars in the container and its lambda functions.
+            cfn_processor.update_template(
+                {
+                    "Globals": {
+                        "Function": {
+                            "Environment": {
+                                "Variables": {
+                                    "AWS_ENDPOINT_URL": f"http://host.docker.internal:{moto_server.port}",
+                                },
+                            },
+                        },
+                    }
+                }
+            )
+
         for api in apis:
             # Each API is processed in a separate stack, so we need to create a new template for each API.
             api_logical_id = api[0]
@@ -346,9 +362,6 @@ class AWSSAMToolkit(CloudFormationTool):
                 # First, remove all other API resources
                 for api in apis_to_remove:
                     api_stack_cfn_processor.remove_resource(api[0])
-
-                # TODO: Remove events referencing the removed APIs
-
                 api_stack_template = cast(Dict[str, Any], api_stack_cfn_processor.processed_template.copy())
             else:
                 api_stack_template = cast(Dict[str, Any], api_stack_cfn_processor.processed_template.copy())
@@ -382,37 +395,7 @@ class AWSSAMToolkit(CloudFormationTool):
                 log_file = Path(self.working_dir) / ".aws-sam" / "aws-sam-testing-build" / f"api-stack-{api_logical_id}" / "log.txt"
 
                 match isolation_level:
-                    case IsolationLevel.NONE:
-                        invoke_ctx = InvokeContext(
-                            template_file=str(api_stack_build_dir / "template.yaml"),
-                            function_identifier=None,
-                            env_vars_file=None,
-                            docker_volume_basedir=str(api_stack_build_dir),
-                            docker_network=None,
-                            container_host_interface="127.0.0.1",
-                            container_host="localhost",
-                            layer_cache_basedir=str(api_stack_build_dir),
-                            force_image_build=False,
-                            skip_pull_image=False,
-                            log_file=str(log_file),
-                            aws_region=os.environ.get("AWS_REGION", "us-east-1"),
-                            aws_profile=os.environ.get("AWS_PROFILE"),
-                            warm_container_initialization_mode="EAGER",
-                        )
-
-                        # Run the API locally.
-                        local_api = LocalApi(
-                            ctx=invoke_ctx,
-                            toolkit=self,
-                            api_logical_id=api_logical_id,
-                            api_data=api_data,
-                            parameters=parameters,
-                            isolation_level=isolation_level,
-                            port=port,
-                            host=host,
-                        )
-                        context_resources.append(local_api)
-                    case IsolationLevel.MOTO:
+                    case IsolationLevel.NONE | IsolationLevel.MOTO:
                         invoke_ctx = InvokeContext(
                             template_file=str(api_stack_build_dir / "template.yaml"),
                             function_identifier=None,

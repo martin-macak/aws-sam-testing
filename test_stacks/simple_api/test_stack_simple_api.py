@@ -1,62 +1,67 @@
-def test_sanity():
-    assert True
+import pytest
 
 
-def test_build_with_toolkit(tmp_path):
-    from pathlib import Path
+class TestSimpleApi:
+    @pytest.fixture(autouse=True)
+    def setup(self, monkeypatch):
+        monkeypatch.setattr("samcli.lib.utils.file_observer.FileObserver.start", lambda *args, **kwargs: None)
+        monkeypatch.setattr("samcli.lib.utils.file_observer.FileObserver.stop", lambda *args, **kwargs: None)
+        yield
 
-    from aws_sam_testing.aws_sam import AWSSAMToolkit
+    def test_build_with_toolkit(self, tmp_path):
+        from pathlib import Path
 
-    toolkit = AWSSAMToolkit(
-        working_dir=Path(__file__).parent,
-        template_path=Path(__file__).parent / "template.yaml",
-    )
+        from aws_sam_testing.aws_sam import AWSSAMToolkit
 
-    toolkit.sam_build(build_dir=tmp_path)
-    p_built_template = tmp_path / "template.yaml"
-    assert p_built_template.exists()
+        toolkit = AWSSAMToolkit(
+            working_dir=Path(__file__).parent,
+            template_path=Path(__file__).parent / "template.yaml",
+        )
 
+        toolkit.sam_build(build_dir=tmp_path)
+        p_built_template = tmp_path / "template.yaml"
+        assert p_built_template.exists()
 
-def test_run_local_api(tmp_path):
-    from pathlib import Path
+    def test_run_local_api(self, tmp_path):
+        from pathlib import Path
 
-    import requests
-    from samcli.local.docker.exceptions import ProcessSigTermException
+        import requests
+        from samcli.local.docker.exceptions import ProcessSigTermException
 
-    from aws_sam_testing.aws_sam import AWSSAMToolkit
+        from aws_sam_testing.aws_sam import AWSSAMToolkit
 
-    toolkit = AWSSAMToolkit(
-        working_dir=Path(__file__).parent,
-        template_path=Path(__file__).parent / "template.yaml",
-    )
+        toolkit = AWSSAMToolkit(
+            working_dir=Path(__file__).parent,
+            template_path=Path(__file__).parent / "template.yaml",
+        )
 
-    toolkit.sam_build(build_dir=tmp_path)
+        toolkit.sam_build(build_dir=tmp_path)
 
-    try:
-        with toolkit.run_local_api() as apis:
-            assert len(apis) == 1
+        try:
+            with toolkit.run_local_api() as apis:
+                assert len(apis) == 1
 
-            api = apis[0]
+                api = apis[0]
 
-            assert api.api_logical_id == "MyApi"
-            assert api.port is not None
-            assert api.host is not None
+                assert api.api_logical_id == "MyApi"
+                assert api.port is not None
+                assert api.host is not None
 
-            api.wait_for_api_to_be_ready()
+                api.wait_for_api_to_be_ready()
 
-            for api in apis:
-                assert api.is_running
+                for api in apis:
+                    assert api.is_running
 
-            response = requests.get(f"http://{api.host}:{api.port}/hello")
-            assert response is not None
-            assert response.status_code == 200
-            assert response.json() == {"message": "Hello World!"}
+                response = requests.get(f"http://{api.host}:{api.port}/hello")
+                assert response is not None
+                assert response.status_code == 200
+                assert response.json() == {"message": "Hello World!"}
 
-            for api in apis:
-                api.stop()
+                for api in apis:
+                    api.stop()
 
-            for api in apis:
-                assert not api.is_running
+                for api in apis:
+                    assert not api.is_running
 
-    except ProcessSigTermException:
-        pass
+        except ProcessSigTermException:
+            pass

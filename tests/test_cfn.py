@@ -1047,3 +1047,218 @@ class TestTransformCfnTags:
 
         # Template should remain unchanged
         assert processor.processed_template == template
+
+
+class TestUpdateTemplate:
+    def test_update_template_simple_merge(self):
+        """Test simple update of template values."""
+        template = {"AWSTemplateFormatVersion": "2010-09-09", "Resources": {"MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Runtime": "python3.9", "Handler": "index.handler"}}}}
+
+        processor = CloudFormationTemplateProcessor(template)
+        processor.update_template({"Resources": {"MyFunction": {"Properties": {"Runtime": "python3.11", "MemorySize": 256}}}})
+
+        # Verify the runtime was updated and memory was added
+        props = processor.processed_template["Resources"]["MyFunction"]["Properties"]
+        assert props["Runtime"] == "python3.11"
+        assert props["Handler"] == "index.handler"  # Original preserved
+        assert props["MemorySize"] == 256  # New added
+
+    def test_update_template_nested_merge(self):
+        """Test nested merge as specified in the docstring example."""
+        template = {"Globals": {"Function": {"Environment": {"Variables": {"A": "a"}}}}}
+
+        processor = CloudFormationTemplateProcessor(template)
+        processor.update_template({"Globals": {"Function": {"Environment": {"Variables": {"B": "b"}}}}})
+
+        # Verify both variables exist
+        variables = processor.processed_template["Globals"]["Function"]["Environment"]["Variables"]
+        assert variables["A"] == "a"
+        assert variables["B"] == "b"
+        assert len(variables) == 2
+
+    def test_update_template_add_new_sections(self):
+        """Test adding completely new sections to the template."""
+        template = {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket"}}}
+
+        processor = CloudFormationTemplateProcessor(template)
+        processor.update_template({"Parameters": {"BucketName": {"Type": "String", "Default": "my-bucket"}}, "Outputs": {"BucketArn": {"Value": {"Fn::GetAtt": ["MyBucket", "Arn"]}}}})
+
+        # Verify new sections were added
+        assert "Parameters" in processor.processed_template
+        assert "BucketName" in processor.processed_template["Parameters"]
+        assert processor.processed_template["Parameters"]["BucketName"]["Default"] == "my-bucket"
+        assert "Outputs" in processor.processed_template
+        assert "BucketArn" in processor.processed_template["Outputs"]
+        # Original resource should still exist
+        assert "MyBucket" in processor.processed_template["Resources"]
+
+    def test_update_template_list_replacement(self):
+        """Test that lists are replaced entirely, not merged."""
+        template = {"Resources": {"MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"Layers": ["layer1", "layer2"], "SecurityGroupIds": ["sg-1", "sg-2"]}}}}
+
+        processor = CloudFormationTemplateProcessor(template)
+        processor.update_template({"Resources": {"MyFunction": {"Properties": {"Layers": ["layer3", "layer4", "layer5"], "SecurityGroupIds": ["sg-3"]}}}})
+
+        # Verify lists were replaced entirely
+        props = processor.processed_template["Resources"]["MyFunction"]["Properties"]
+        assert props["Layers"] == ["layer3", "layer4", "layer5"]
+        assert props["SecurityGroupIds"] == ["sg-3"]
+
+    def test_update_template_deep_nesting(self):
+        """Test deeply nested updates."""
+        template = {"Level1": {"Level2": {"Level3": {"Level4": {"existing": "value", "another": "data", "number": 42}}}}}
+
+        processor = CloudFormationTemplateProcessor(template)
+        processor.update_template({"Level1": {"Level2": {"Level3": {"Level4": {"new": "addition", "another": "updated", "number": 100}}}}})
+
+        # Verify deep merge
+        level4 = processor.processed_template["Level1"]["Level2"]["Level3"]["Level4"]
+        assert level4["existing"] == "value"  # Original preserved
+        assert level4["another"] == "updated"  # Updated
+        assert level4["new"] == "addition"  # New added
+        assert level4["number"] == 100  # Primitive replaced
+        assert len(level4) == 4
+
+    def test_update_template_method_chaining(self):
+        """Test that method returns self for chaining."""
+        template = {"Resources": {}}
+        processor = CloudFormationTemplateProcessor(template)
+
+        # Should be able to chain calls
+        result = processor.update_template({"Parameters": {"Test": {"Type": "String"}}}).update_template({"Outputs": {"TestOut": {"Value": "test"}}})
+
+        assert result is processor
+        assert "Parameters" in processor.processed_template
+        assert "Outputs" in processor.processed_template
+
+    def test_update_template_with_cloudformation_tags(self):
+        """Test updating template with CloudFormation intrinsic functions."""
+        yaml_content = """
+        Resources:
+          MyBucket:
+            Type: AWS::S3::Bucket
+            Properties:
+              BucketName: !Ref BucketParam
+        """
+        template = load_yaml(yaml_content)
+        processor = CloudFormationTemplateProcessor(template)
+
+        # Update with new properties containing tags
+        update_yaml = """
+        Resources:
+          MyBucket:
+            Properties:
+              Tags:
+                - Key: Environment
+                  Value: !Ref EnvParam
+                - Key: Name
+                  Value: !Sub "${AWS::StackName}-bucket"
+        """
+        update = load_yaml(update_yaml)
+        processor.update_template(update)
+
+        # Verify both old and new properties exist
+        props = processor.processed_template["Resources"]["MyBucket"]["Properties"]
+        assert "BucketName" in props  # Original preserved
+        assert "Tags" in props  # New added
+        assert len(props["Tags"]) == 2
+
+    def test_update_template_replace_resource_type(self):
+        """Test that non-dict values like Type are replaced."""
+        template = {"Resources": {"MyResource": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": "my-bucket"}}}}
+
+        processor = CloudFormationTemplateProcessor(template)
+        processor.update_template({"Resources": {"MyResource": {"Type": "AWS::S3::BucketPolicy", "Properties": {"PolicyDocument": {"Statement": []}}}}})
+
+        # Type should be replaced, Properties should be merged
+        resource = processor.processed_template["Resources"]["MyResource"]
+        assert resource["Type"] == "AWS::S3::BucketPolicy"
+        # Since Properties values are dicts, they should merge
+        assert "BucketName" in resource["Properties"]
+        assert "PolicyDocument" in resource["Properties"]
+
+    def test_update_template_empty_update(self):
+        """Test updating with an empty dictionary."""
+        template = {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket"}}}
+
+        processor = CloudFormationTemplateProcessor(template)
+        original = processor.processed_template.copy()
+        processor.update_template({})
+
+        # Nothing should change
+        assert processor.processed_template == original
+
+    def test_update_template_boolean_and_null_values(self):
+        """Test updating with boolean and null values."""
+        template = {"Resources": {"MyFunction": {"Type": "AWS::Lambda::Function", "Properties": {"ReservedConcurrentExecutions": 100, "TracingConfig": {"Mode": "Active"}}}}}
+
+        processor = CloudFormationTemplateProcessor(template)
+        processor.update_template(
+            {
+                "Resources": {
+                    "MyFunction": {"Properties": {"ReservedConcurrentExecutions": None, "TracingConfig": {"Mode": "PassThrough"}, "Architectures": ["arm64"], "EphemeralStorage": {"Size": 512}}}
+                }
+            }
+        )
+
+        # Verify updates
+        props = processor.processed_template["Resources"]["MyFunction"]["Properties"]
+        assert props["ReservedConcurrentExecutions"] is None
+        assert props["TracingConfig"]["Mode"] == "PassThrough"
+        assert props["Architectures"] == ["arm64"]
+        assert props["EphemeralStorage"]["Size"] == 512
+
+    def test_update_template_complex_sam_globals(self):
+        """Test updating a complex SAM template with Globals."""
+        yaml_content = """
+        Transform: AWS::Serverless-2016-10-31
+        Globals:
+          Function:
+            Runtime: python3.9
+            Timeout: 30
+            Environment:
+              Variables:
+                LOG_LEVEL: INFO
+                REGION: !Ref AWS::Region
+        
+        Resources:
+          MyFunction:
+            Type: AWS::Serverless::Function
+            Properties:
+              Handler: index.handler
+        """
+        template = load_yaml(yaml_content)
+        processor = CloudFormationTemplateProcessor(template)
+
+        # Update globals
+        processor.update_template({"Globals": {"Function": {"Runtime": "python3.11", "MemorySize": 256, "Environment": {"Variables": {"LOG_LEVEL": "DEBUG", "API_KEY": "secret-key"}}}}})
+
+        # Verify globals were properly merged
+        globals_func = processor.processed_template["Globals"]["Function"]
+        assert globals_func["Runtime"] == "python3.11"  # Updated
+        assert globals_func["Timeout"] == 30  # Original preserved
+        assert globals_func["MemorySize"] == 256  # New added
+
+        env_vars = globals_func["Environment"]["Variables"]
+        assert env_vars["LOG_LEVEL"] == "DEBUG"  # Updated
+        assert "REGION" in env_vars  # Original preserved with CF tag
+        assert env_vars["API_KEY"] == "secret-key"  # New added
+
+    def test_update_template_preserves_deep_copy(self):
+        """Test that update doesn't modify the original update dictionary."""
+        template = {"Resources": {}}
+        processor = CloudFormationTemplateProcessor(template)
+
+        update_dict = {"Resources": {"MyBucket": {"Type": "AWS::S3::Bucket", "Properties": {"BucketName": "test-bucket"}}}}
+
+        # Keep a copy to compare
+        update_copy = update_dict.copy()
+
+        processor.update_template(update_dict)
+
+        # Modify the processor's template
+        processor.processed_template["Resources"]["MyBucket"]["Properties"]["BucketName"] = "modified-bucket"
+
+        # Original update dict should be unchanged
+        assert update_dict == update_copy
+        assert update_dict["Resources"]["MyBucket"]["Properties"]["BucketName"] == "test-bucket"

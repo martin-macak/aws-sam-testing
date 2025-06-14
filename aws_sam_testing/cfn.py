@@ -294,6 +294,58 @@ class CloudFormationTemplateProcessor:
 
         return self
 
+    def update_template(self, update: dict[str, Any]) -> "CloudFormationTemplateProcessor":
+        """
+        Recursively update the processed template with values from the given template.
+
+        This method performs a deep merge where:
+        - Dictionary values are merged recursively
+        - List values are replaced entirely
+        - Primitive values (str, int, bool, etc.) are replaced
+
+        Args:
+            update: Dictionary containing the updates to apply to the template
+
+        Returns:
+            Self for method chaining
+
+        Example:
+            >>> processor = CloudFormationTemplateProcessor(template)
+            >>> processor.update_template({
+            ...     "Globals": {
+            ...         "Function": {
+            ...             "Environment": {
+            ...                 "Variables": {
+            ...                     "NEW_VAR": "new_value"
+            ...                 }
+            ...             }
+            ...         }
+            ...     }
+            ... })
+        """
+
+        def recursive_update(target: dict[str, Any], source: dict[str, Any]) -> None:
+            """
+            Recursively update target dictionary with values from source dictionary.
+
+            Args:
+                target: The dictionary to update
+                source: The dictionary containing updates
+            """
+            for key, value in source.items():
+                if key in target and isinstance(target[key], dict) and isinstance(value, dict):
+                    # Both are dictionaries, merge recursively
+                    recursive_update(target[key], value)
+                else:
+                    # Either key doesn't exist, or one/both values aren't dicts
+                    # Replace the value entirely
+                    target[key] = copy.deepcopy(value)
+
+        # Perform the recursive update on the processed template
+        recursive_update(self.processed_template, update)
+
+        return self
+
     def _remove_references_to_resource(self, resource_name: str):
         """Remove all references to a resource from the template."""
 

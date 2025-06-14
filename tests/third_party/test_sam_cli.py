@@ -304,3 +304,5 @@ def handler(event, context):
                             os.kill(pid, signal.SIGTERM)
     except RequestException as e:
         print(f"Error: {e}")
+    except OSError as e:
+        print(f"Error: {e}")
