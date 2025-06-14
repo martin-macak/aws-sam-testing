@@ -283,11 +283,15 @@ class AWSSAMToolkit(CloudFormationTool):
             ...     pass
         """
         import os
+
+        # import docker
         from contextlib import ExitStack
 
+        from moto.cloudformation.parsing import ResourceMap
         from samcli.commands.local.cli_common.invoke_context import InvokeContext
 
         from aws_sam_testing.cfn import dump_yaml
+        from aws_sam_testing.moto_server import MotoServer
 
         # Validate parameters
         if port is not None and (port < 1 or port > 65535):
@@ -307,6 +311,26 @@ class AWSSAMToolkit(CloudFormationTool):
             raise ValueError("No API resources found in template")
 
         api_handlers = []
+        context_resources = []
+
+        if isolation_level == IsolationLevel.MOTO:
+            moto_server = MotoServer()
+            moto_server.start()
+            context_resources.append(moto_server)
+            moto_server.wait_for_start()
+
+            resource_map = ResourceMap(
+                stack_id="test-stack",
+                stack_name="test-stack",
+                parameters={},
+                tags={},
+                region_name=os.environ.get("AWS_REGION", "us-east-1"),
+                account_id="123456789012",
+                template=self.template,
+                cross_stack_resources={},
+            )
+            resource_map.load()
+            resource_map.create(self.template)
 
         for api in apis:
             # Each API is processed in a separate stack, so we need to create a new template for each API.
@@ -371,7 +395,7 @@ class AWSSAMToolkit(CloudFormationTool):
                             force_image_build=False,
                             skip_pull_image=False,
                             log_file=str(log_file),
-                            aws_region=os.environ.get("AWS_REGION", "eu-west-1"),
+                            aws_region=os.environ.get("AWS_REGION", "us-east-1"),
                             aws_profile=os.environ.get("AWS_PROFILE"),
                             warm_container_initialization_mode="EAGER",
                         )
@@ -387,9 +411,37 @@ class AWSSAMToolkit(CloudFormationTool):
                             port=port,
                             host=host,
                         )
+                        context_resources.append(local_api)
                     case IsolationLevel.MOTO:
-                        raise ValueError(f"Unsupported isolation level: {isolation_level}")
+                        invoke_ctx = InvokeContext(
+                            template_file=str(api_stack_build_dir / "template.yaml"),
+                            function_identifier=None,
+                            env_vars_file=None,
+                            docker_volume_basedir=str(api_stack_build_dir),
+                            docker_network=None,
+                            container_host_interface="127.0.0.1",
+                            container_host="localhost",
+                            layer_cache_basedir=str(api_stack_build_dir),
+                            force_image_build=False,
+                            skip_pull_image=False,
+                            log_file=str(log_file),
+                            aws_region=os.environ.get("AWS_REGION", "us-east-1"),
+                            aws_profile=os.environ.get("AWS_PROFILE"),
+                            warm_container_initialization_mode="EAGER",
+                        )
 
+                        # Run the API locally.
+                        local_api = LocalApi(
+                            ctx=invoke_ctx,
+                            toolkit=self,
+                            api_logical_id=api_logical_id,
+                            api_data=api_data,
+                            parameters=parameters,
+                            isolation_level=isolation_level,
+                            port=port,
+                            host=host,
+                        )
+                        context_resources.append(local_api)
             finally:
                 # Remove the temporary template
                 api_stack_template_path.unlink(missing_ok=True)
@@ -398,29 +450,7 @@ class AWSSAMToolkit(CloudFormationTool):
 
         # Run APIs in managed context.
         with ExitStack() as stack:
-            resources = [stack.enter_context(api_handler) for api_handler in api_handlers]
+            for resource in context_resources:
+                stack.enter_context(resource)
 
-            yield resources
-
-
-class MotoInvokeContext(InvokeContext):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.moto_server = None
-
-    def __enter__(self):
-        super().__enter__()
-        self._start_moto_server()
-        return self
-
-    def __exit__(self, *args):
-        try:
-            self._stop_moto_server()
-        finally:
-            super().__exit__(*args)
-
-    def _start_moto_server(self):
-        pass
-
-    def _stop_moto_server(self):
-        pass
+            yield api_handlers
