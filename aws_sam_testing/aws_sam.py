@@ -356,7 +356,7 @@ class AWSSAMToolkit(CloudFormationTool):
             # Now we need to remove the API resources and their dependencies, because sam local start-api can
             # safely execute only stacks with a single API resource.
             apis_to_remove = [api for api in apis if api[0] != api_logical_id]
-            api_stack_cfn_processor = CloudFormationTemplateProcessor(self.template)
+            api_stack_cfn_processor = CloudFormationTemplateProcessor(cfn_processor.processed_template)
 
             if apis_to_remove:
                 # First, remove all other API resources
