@@ -2,7 +2,7 @@ def test_sanity():
     assert True
 
 
-def test_build_with_toolkit():
+def test_build_with_toolkit(tmp_path):
     from pathlib import Path
 
     from aws_sam_testing.aws_sam import AWSSAMToolkit
@@ -12,13 +12,12 @@ def test_build_with_toolkit():
         template_path=Path(__file__).parent / "template.yaml",
     )
 
-    toolkit.sam_build()
-
-    p_built_template = Path(__file__).parent / ".aws-sam" / "aws-sam-testing-build" / "template.yaml"
+    toolkit.sam_build(build_dir=tmp_path)
+    p_built_template = tmp_path / "template.yaml"
     assert p_built_template.exists()
 
 
-def test_run_local_api():
+def test_run_local_api(tmp_path):
     from pathlib import Path
 
     import requests
@@ -31,7 +30,7 @@ def test_run_local_api():
         template_path=Path(__file__).parent / "template.yaml",
     )
 
-    toolkit.sam_build()
+    toolkit.sam_build(build_dir=tmp_path)
 
     try:
         with toolkit.run_local_api() as apis:
