@@ -4,11 +4,16 @@ import os
 import boto3
 
 dynamodb = boto3.resource("dynamodb")
-table_name = os.environ.get("TABLE_NAME")
-table = dynamodb.Table(table_name)
+
+
 
 
 def lambda_handler(event, context):
+    table_name = os.environ.get("TABLE_NAME")
+    if not table_name:
+        return {"statusCode": 500, "headers": {"Content-Type": "application/json"}, "body": json.dumps({"error": "TABLE_NAME environment variable is not set"})}
+
+    table = dynamodb.Table(table_name)
     path = event.get("path", "")
     http_method = event.get("httpMethod", "")
 
