@@ -1,12 +1,4 @@
-import os
-
 import pytest
-
-
-@pytest.fixture
-def aws_region():
-    region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "fake-default-region"
-    yield region
 
 
 @pytest.fixture(scope="function", autouse=True)

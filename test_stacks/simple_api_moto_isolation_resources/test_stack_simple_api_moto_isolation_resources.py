@@ -1,5 +1,6 @@
 import pytest
 
+
 class TestSimpleApiMotoIsolationResources:
     @pytest.fixture(autouse=True)
     def setup(self, monkeypatch):
@@ -26,8 +27,8 @@ class TestSimpleApiMotoIsolationResources:
 
         import requests
         from samcli.local.docker.exceptions import ProcessSigTermException
-        from aws_sam_testing.aws_sam import IsolationLevel
-        from aws_sam_testing.aws_sam import AWSSAMToolkit
+
+        from aws_sam_testing.aws_sam import AWSSAMToolkit, IsolationLevel
 
         toolkit = AWSSAMToolkit(
             working_dir=Path(__file__).parent,

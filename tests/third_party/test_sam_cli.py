@@ -4,6 +4,13 @@ import pytest
 from requests import RequestException
 
 
+@pytest.fixture(autouse=True)
+def setup(monkeypatch):
+    monkeypatch.setattr("samcli.lib.utils.file_observer.FileObserver.start", lambda *args, **kwargs: None)
+    monkeypatch.setattr("samcli.lib.utils.file_observer.FileObserver.stop", lambda *args, **kwargs: None)
+    yield
+
+
 def test_sam_cli_build(tmp_path: Path):
     import os
 

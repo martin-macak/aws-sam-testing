@@ -1,5 +1,6 @@
 import pytest
 
+
 class TestTwoApis:
     @pytest.fixture(autouse=True)
     def setup(self, monkeypatch):
@@ -7,7 +8,9 @@ class TestTwoApis:
         monkeypatch.setattr("samcli.lib.utils.file_observer.FileObserver.stop", lambda *args, **kwargs: None)
         yield
 
-    def test_build_with_toolkit(self,):
+    def test_build_with_toolkit(
+        self,
+    ):
         from pathlib import Path
 
         from aws_sam_testing.aws_sam import AWSSAMToolkit
