@@ -118,9 +118,11 @@ class LocalStackToolkit(CloudFormationTool):
         try:
             # store the template in the build directory next to the source template
             # relative paths in the template will be correct
-            dump_yaml(template, stream=localstack_source_template_path)
+            localstack_source_template_path.parent.mkdir(parents=True, exist_ok=True)
+            dump_yaml(template, stream=localstack_source_template_path.open("w"))
             # for debugging purposes, save the source template
-            dump_yaml(template, stream=localstack_base_build_dir / "template.source.yaml")
+            localstack_base_build_dir.mkdir(parents=True, exist_ok=True)
+            dump_yaml(template, stream=(localstack_base_build_dir / "template.source.yaml").open("w"))
 
             # run the AWS SAM build
             # this creates the base build
@@ -140,7 +142,7 @@ class LocalStackToolkit(CloudFormationTool):
             # this creates new AWS SAM build with flattened layers
             self._process_lambda_layers(
                 source_template_path=localstack_base_build_dir / "template.yaml",
-                build_dir=localstack_base_build_dir,
+                build_dir=localstack_processed_build_dir,
                 flatten_layers=True,
                 layer_cache_dir=localstack_base_build_dir / "tmp" / "aws-sam-testing-localstack-layers",
             )
@@ -148,7 +150,7 @@ class LocalStackToolkit(CloudFormationTool):
             # copy the source build into the localstack build
             shutil.copytree(localstack_base_build_dir, localstack_processed_build_dir, dirs_exist_ok=True)
 
-        return localstack_base_build_dir
+        return localstack_processed_build_dir
 
     def _process_lambda_layers(
         self,

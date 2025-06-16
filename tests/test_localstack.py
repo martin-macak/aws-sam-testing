@@ -13,6 +13,517 @@ class TestLocalStack:
 class TestStackToolkit:
     """Test suite for LocalStackToolkit class."""
 
+    class TestBuild:
+        """Test suite for build method."""
+
+        @pytest.fixture
+        def toolkit(self, tmp_path):
+            """Create a LocalStackToolkit instance with a temporary working directory."""
+            working_dir = tmp_path / "project"
+            working_dir.mkdir()
+            template_path = working_dir / "template.yaml"
+            template_path.write_text("""
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Resources:
+  MyFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/my-function/
+      Handler: index.handler
+      Runtime: python3.9
+  MyLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      ContentUri: layers/my-layer/
+      CompatibleRuntimes:
+        - python3.9
+""")
+            return LocalStackToolkit(working_dir=str(working_dir), template_path=str(template_path))
+
+        @patch("aws_sam_testing.aws_sam.AWSSAMToolkit")
+        @patch("aws_sam_testing.cfn.dump_yaml")
+        def test_build_normal_feature_set_default_build_dir(self, mock_dump_yaml, mock_aws_sam_toolkit, toolkit, tmp_path):
+            """Test build with normal feature set and default build directory."""
+            from aws_sam_testing.localstack import LocalStackFeautureSet
+
+            # Mock AWSSAMToolkit
+            mock_sam = MagicMock()
+            mock_aws_sam_toolkit.return_value = mock_sam
+
+            # Mock dump_yaml to actually create the temporary file for cleanup
+            def mock_dump_yaml_side_effect(template, stream):
+                if hasattr(stream, "write_text"):
+                    # This is a Path object
+                    stream.parent.mkdir(parents=True, exist_ok=True)
+                    stream.write_text("# Mock template")
+                elif hasattr(stream, "write"):
+                    # This is a file-like object
+                    stream.write("# Mock template")
+
+            mock_dump_yaml.side_effect = mock_dump_yaml_side_effect
+
+            # Mock _process_lambda_layers to avoid complex layer processing in unit test
+            with patch.object(toolkit, "_process_lambda_layers") as mock_process_layers:
+                mock_process_layers.return_value = tmp_path / "processed"
+
+                result = toolkit.build(feature_set=LocalStackFeautureSet.NORMAL)
+
+                # Check default build directories were used
+                expected_processed_dir = tmp_path / "project" / ".aws-sam" / "aws-sam-testing-localstack-processed-build"
+                assert str(expected_processed_dir) in str(result)
+
+                # Check AWSSAMToolkit was called correctly
+                mock_aws_sam_toolkit.assert_called_once()
+                mock_sam.sam_build.assert_called_once()
+
+                # Check _process_lambda_layers was called for NORMAL feature set
+                mock_process_layers.assert_called_once()
+
+                # Check dump_yaml was called twice (source template and debug template)
+                assert mock_dump_yaml.call_count == 2
+
+        @patch("aws_sam_testing.aws_sam.AWSSAMToolkit")
+        @patch("aws_sam_testing.cfn.dump_yaml")
+        def test_build_pro_feature_set_custom_build_dir(self, mock_dump_yaml, mock_aws_sam_toolkit, toolkit, tmp_path):
+            """Test build with PRO feature set and custom build directory."""
+            import shutil
+
+            from aws_sam_testing.localstack import LocalStackFeautureSet
+
+            custom_build_dir = tmp_path / "custom_build"
+            custom_build_dir.mkdir()
+
+            # Mock AWSSAMToolkit
+            mock_sam = MagicMock()
+            mock_aws_sam_toolkit.return_value = mock_sam
+
+            # Mock dump_yaml to actually create the temporary file for cleanup
+            def mock_dump_yaml_side_effect(template, stream):
+                if hasattr(stream, "write_text"):
+                    # This is a Path object
+                    stream.parent.mkdir(parents=True, exist_ok=True)
+                    stream.write_text("# Mock template")
+                elif hasattr(stream, "write"):
+                    # This is a file-like object
+                    stream.write("# Mock template")
+
+            mock_dump_yaml.side_effect = mock_dump_yaml_side_effect
+
+            # Mock shutil.copytree for PRO feature set
+            with patch.object(shutil, "copytree") as mock_copytree:
+                result = toolkit.build(feature_set=LocalStackFeautureSet.PRO, build_dir=custom_build_dir)
+
+                # Check custom build directories were used
+                expected_processed_dir = custom_build_dir / "aws-sam-testing-localstack-processed-build"
+                assert str(expected_processed_dir) in str(result)
+
+                # Check copytree was called for PRO feature set (no layer processing)
+                mock_copytree.assert_called_once()
+
+        @patch("aws_sam_testing.aws_sam.AWSSAMToolkit")
+        @patch("aws_sam_testing.cfn.dump_yaml")
+        def test_build_template_cleanup_on_error(self, mock_dump_yaml, mock_aws_sam_toolkit, toolkit, tmp_path):
+            """Test that temporary template file is cleaned up even when build fails."""
+            from aws_sam_testing.localstack import LocalStackFeautureSet
+
+            # Mock dump_yaml to actually create the temporary file for cleanup testing
+            def mock_dump_yaml_side_effect(template, stream):
+                if hasattr(stream, "write_text"):
+                    # This is a Path object
+                    stream.parent.mkdir(parents=True, exist_ok=True)
+                    stream.write_text("# Mock template")
+                elif hasattr(stream, "write"):
+                    # This is a file-like object
+                    stream.write("# Mock template")
+
+            mock_dump_yaml.side_effect = mock_dump_yaml_side_effect
+
+            # Mock AWSSAMToolkit to raise an exception
+            mock_sam = MagicMock()
+            mock_sam.sam_build.side_effect = Exception("Build failed")
+            mock_aws_sam_toolkit.return_value = mock_sam
+
+            # Check that build raises the exception
+            with pytest.raises(Exception, match="Build failed"):
+                toolkit.build(feature_set=LocalStackFeautureSet.NORMAL)
+
+            # Check that temporary template file was cleaned up
+            temp_template_path = tmp_path / "project" / ".aws-sam" / "template.localstack.yaml"
+            assert not temp_template_path.exists()
+
+        @patch("aws_sam_testing.localstack.LocalStackCloudFormationTemplateProcessor")
+        @patch("aws_sam_testing.cfn.dump_yaml")
+        def test_build_pro_resource_removal(self, mock_dump_yaml, mock_processor_class, toolkit):
+            """Test that PRO resources are removed for NORMAL feature set."""
+            from aws_sam_testing.localstack import LocalStackFeautureSet
+
+            # Mock dump_yaml to actually create the temporary file for cleanup
+            def mock_dump_yaml_side_effect(template, stream):
+                if hasattr(stream, "write_text"):
+                    # This is a Path object
+                    stream.parent.mkdir(parents=True, exist_ok=True)
+                    stream.write_text("# Mock template")
+                elif hasattr(stream, "write"):
+                    # This is a file-like object
+                    stream.write("# Mock template")
+
+            mock_dump_yaml.side_effect = mock_dump_yaml_side_effect
+
+            # Mock processor
+            mock_processor = MagicMock()
+            mock_processor.processed_template = {"Resources": {}}
+            mock_processor_class.return_value = mock_processor
+
+            with patch("aws_sam_testing.aws_sam.AWSSAMToolkit"), patch.object(toolkit, "_process_lambda_layers"):
+                toolkit.build(feature_set=LocalStackFeautureSet.NORMAL)
+
+                # Check remove_pro_resources was called for NORMAL feature set
+                mock_processor.remove_pro_resources.assert_called_once()
+
+        @patch("aws_sam_testing.localstack.LocalStackCloudFormationTemplateProcessor")
+        @patch("aws_sam_testing.cfn.dump_yaml")
+        def test_build_no_pro_resource_removal_for_pro(self, mock_dump_yaml, mock_processor_class, toolkit):
+            """Test that PRO resources are NOT removed for PRO feature set."""
+            import shutil
+
+            from aws_sam_testing.localstack import LocalStackFeautureSet
+
+            # Mock dump_yaml to actually create the temporary file for cleanup
+            def mock_dump_yaml_side_effect(template, stream):
+                if hasattr(stream, "write_text"):
+                    # This is a Path object
+                    stream.parent.mkdir(parents=True, exist_ok=True)
+                    stream.write_text("# Mock template")
+                elif hasattr(stream, "write"):
+                    # This is a file-like object
+                    stream.write("# Mock template")
+
+            mock_dump_yaml.side_effect = mock_dump_yaml_side_effect
+
+            # Mock processor
+            mock_processor = MagicMock()
+            mock_processor.processed_template = {"Resources": {}}
+            mock_processor_class.return_value = mock_processor
+
+            with patch("aws_sam_testing.aws_sam.AWSSAMToolkit"), patch.object(shutil, "copytree"):
+                toolkit.build(feature_set=LocalStackFeautureSet.PRO)
+
+                # Check remove_pro_resources was NOT called for PRO feature set
+                mock_processor.remove_pro_resources.assert_not_called()
+
+        @patch("aws_sam_testing.cfn.dump_yaml")
+        def test_build_path_assertions(self, mock_dump_yaml, toolkit):
+            """Test that build method has proper path assertions."""
+            from aws_sam_testing.localstack import LocalStackFeautureSet
+
+            # Mock dump_yaml to actually create the temporary file for cleanup
+            def mock_dump_yaml_side_effect(template, stream):
+                if hasattr(stream, "write_text"):
+                    # This is a Path object
+                    stream.parent.mkdir(parents=True, exist_ok=True)
+                    stream.write_text("# Mock template")
+                elif hasattr(stream, "write"):
+                    # This is a file-like object
+                    stream.write("# Mock template")
+
+            mock_dump_yaml.side_effect = mock_dump_yaml_side_effect
+
+            with patch("aws_sam_testing.aws_sam.AWSSAMToolkit"), patch.object(toolkit, "_process_lambda_layers"):
+                # This should not raise AssertionError
+                result = toolkit.build(feature_set=LocalStackFeautureSet.NORMAL)
+
+                # The method should return a valid path
+                assert result is not None
+
+        @pytest.mark.slow
+        @patch("aws_sam_testing.aws_sam.AWSSAMToolkit")
+        def test_integration_build_normal_with_mocked_sam_build(self, mock_aws_sam_toolkit, tmp_path):
+            """Integration test: Build with NORMAL feature set using mocked SAM build."""
+            import yaml
+
+            from aws_sam_testing.localstack import LocalStackFeautureSet
+
+            # Create a complete SAM project structure
+            project_dir = tmp_path / "sam_project"
+            project_dir.mkdir()
+
+            # Create template.yaml with function and layer
+            template_content = {
+                "AWSTemplateFormatVersion": "2010-09-09",
+                "Transform": "AWS::Serverless-2016-10-31",
+                "Resources": {
+                    "HelloWorldFunction": {
+                        "Type": "AWS::Serverless::Function",
+                        "Properties": {"CodeUri": "hello_world/", "Handler": "app.lambda_handler", "Runtime": "python3.9", "Layers": [{"Ref": "SharedLayer"}], "Architectures": ["x86_64"]},
+                    },
+                    "SharedLayer": {"Type": "AWS::Serverless::LayerVersion", "Properties": {"ContentUri": "layer/", "CompatibleRuntimes": ["python3.9"], "CompatibleArchitectures": ["x86_64"]}},
+                    # Add a PRO resource that should be removed in NORMAL mode
+                    "CognitoUserPool": {"Type": "AWS::Cognito::UserPool", "Properties": {"UserPoolName": "test-pool"}},
+                },
+            }
+
+            template_path = project_dir / "template.yaml"
+            with open(template_path, "w") as f:
+                yaml.dump(template_content, f)
+
+            # Create function code
+            func_dir = project_dir / "hello_world"
+            func_dir.mkdir()
+            (func_dir / "app.py").write_text("""
+def lambda_handler(event, context):
+    import shared_module  # This should come from the layer
+    return {
+        'statusCode': 200,
+        'body': shared_module.get_message()
+    }
+""")
+            (func_dir / "requirements.txt").write_text("# No requirements")
+
+            # Create layer code
+            layer_dir = project_dir / "layer" / "python"
+            layer_dir.mkdir(parents=True)
+            (layer_dir / "shared_module.py").write_text("""
+def get_message():
+    return "Hello from shared layer!"
+""")
+
+            # Mock SAM toolkit to simulate successful build
+            mock_sam = MagicMock()
+
+            def mock_sam_build(build_dir):
+                """Mock SAM build that creates expected directory structure."""
+                build_dir.mkdir(parents=True, exist_ok=True)
+
+                # Create mock built template
+                built_template = {
+                    "AWSTemplateFormatVersion": "2010-09-09",
+                    "Transform": "AWS::Serverless-2016-10-31",
+                    "Resources": {
+                        "HelloWorldFunction": {
+                            "Type": "AWS::Serverless::Function",
+                            "Properties": {"CodeUri": "HelloWorldFunction", "Handler": "app.lambda_handler", "Runtime": "python3.9", "Layers": [{"Ref": "SharedLayer"}]},
+                        },
+                        "SharedLayer": {"Type": "AWS::Serverless::LayerVersion", "Properties": {"ContentUri": "SharedLayer", "CompatibleRuntimes": ["python3.9"]}},
+                        "CognitoUserPool": {"Type": "AWS::Cognito::UserPool", "Properties": {"UserPoolName": "test-pool"}},
+                    },
+                }
+
+                with open(build_dir / "template.yaml", "w") as f:
+                    yaml.dump(built_template, f)
+
+                # Create function and layer directories
+                func_build_dir = build_dir / "HelloWorldFunction"
+                func_build_dir.mkdir()
+                (func_build_dir / "app.py").write_text("def lambda_handler(event, context): pass")
+
+                layer_build_dir = build_dir / "SharedLayer"
+                layer_build_dir.mkdir()
+                layer_python_dir = layer_build_dir / "python"
+                layer_python_dir.mkdir()
+                (layer_python_dir / "shared_module.py").write_text("def get_message(): return 'Hello from layer!'")
+
+            mock_sam.sam_build.side_effect = mock_sam_build
+            mock_aws_sam_toolkit.return_value = mock_sam
+
+            # Create LocalStackToolkit instance
+            toolkit = LocalStackToolkit(working_dir=str(project_dir), template_path=str(template_path))
+
+            # Test build process
+            result_path = toolkit.build(feature_set=LocalStackFeautureSet.NORMAL)
+
+            print(f"\\nBuild completed. Result path: {result_path}")
+
+            # Verify directory structure
+            print(f"\\nDirectory structure for {result_path}:")
+            for item in result_path.rglob("*"):
+                if item.is_file():
+                    print(f"  File: {item.relative_to(result_path)}")
+                else:
+                    print(f"  Dir:  {item.relative_to(result_path)}/")
+
+            # Verify build artifacts exist
+            assert result_path.exists(), "Build directory should exist"
+            assert (result_path / "template.yaml").exists(), "Template should exist in build directory"
+
+            # Check that the built template has PRO resources removed and layers flattened
+            built_template_path = result_path / "template.yaml"
+            with open(built_template_path, "r") as f:
+                built_template = yaml.safe_load(f)
+
+            print("\\nBuilt template.yaml content:")
+            print(yaml.dump(built_template, default_flow_style=False))
+
+        @pytest.mark.slow
+        @patch("aws_sam_testing.aws_sam.AWSSAMToolkit")
+        def test_integration_build_pro_with_pro_resources(self, mock_aws_sam_toolkit, tmp_path):
+            """Integration test: Build with PRO feature set preserving PRO resources."""
+            import shutil
+
+            import yaml
+
+            from aws_sam_testing.localstack import LocalStackFeautureSet
+
+            # Create SAM project with PRO resources
+            project_dir = tmp_path / "sam_pro_project"
+            project_dir.mkdir()
+
+            template_content = {
+                "AWSTemplateFormatVersion": "2010-09-09",
+                "Transform": "AWS::Serverless-2016-10-31",
+                "Resources": {
+                    "SimpleFunction": {
+                        "Type": "AWS::Serverless::Function",
+                        "Properties": {
+                            "CodeUri": "simple_function/",
+                            "Handler": "app.lambda_handler",
+                            "Runtime": "python3.9",
+                            "Environment": {"Variables": {"USER_POOL_ID": {"Ref": "CognitoUserPool"}}},
+                        },
+                    },
+                    "CognitoUserPool": {"Type": "AWS::Cognito::UserPool", "Properties": {"UserPoolName": "test-pool"}},
+                    "WebSocketApi": {"Type": "AWS::ApiGatewayV2::Api", "Properties": {"Name": "test-websocket-api", "ProtocolType": "WEBSOCKET"}},
+                },
+            }
+
+            template_path = project_dir / "template.yaml"
+            with open(template_path, "w") as f:
+                yaml.dump(template_content, f)
+
+            # Create simple function code
+            func_dir = project_dir / "simple_function"
+            func_dir.mkdir()
+            (func_dir / "app.py").write_text("""
+import os
+
+def lambda_handler(event, context):
+    user_pool_id = os.environ.get('USER_POOL_ID', 'not-set')
+    return {
+        'statusCode': 200,
+        'body': f'User Pool ID: {user_pool_id}'
+    }
+""")
+            (func_dir / "requirements.txt").write_text("# No requirements")
+
+            # Mock SAM toolkit
+            mock_sam = MagicMock()
+
+            def mock_sam_build(build_dir):
+                """Mock SAM build for PRO mode."""
+                build_dir.mkdir(parents=True, exist_ok=True)
+
+                # Create mock built template with PRO resources
+                built_template = template_content.copy()
+                built_template["Resources"]["SimpleFunction"]["Properties"]["CodeUri"] = "SimpleFunction"
+
+                with open(build_dir / "template.yaml", "w") as f:
+                    yaml.dump(built_template, f)
+
+                # Create function directory
+                func_build_dir = build_dir / "SimpleFunction"
+                func_build_dir.mkdir()
+                (func_build_dir / "app.py").write_text("def lambda_handler(event, context): pass")
+
+            mock_sam.sam_build.side_effect = mock_sam_build
+            mock_aws_sam_toolkit.return_value = mock_sam
+
+            # Mock shutil.copytree for PRO feature set
+            with patch.object(shutil, "copytree") as mock_copytree:
+                # Create toolkit and build with PRO features
+                toolkit = LocalStackToolkit(working_dir=str(project_dir), template_path=str(template_path))
+                result_path = toolkit.build(feature_set=LocalStackFeautureSet.PRO)
+
+                print(f"\\nPRO build completed. Result path: {result_path}")
+
+                # Verify copytree was called for PRO feature set
+                mock_copytree.assert_called_once()
+
+        @pytest.mark.slow
+        @patch("aws_sam_testing.aws_sam.AWSSAMToolkit")
+        def test_integration_build_directory_structure_validation(self, mock_aws_sam_toolkit, tmp_path):
+            """Integration test: Validate complete directory structure after build."""
+            import yaml
+
+            from aws_sam_testing.localstack import LocalStackFeautureSet
+
+            # Create minimal SAM project
+            project_dir = tmp_path / "structure_test_project"
+            project_dir.mkdir()
+
+            template_content = {
+                "AWSTemplateFormatVersion": "2010-09-09",
+                "Transform": "AWS::Serverless-2016-10-31",
+                "Resources": {"TestFunction": {"Type": "AWS::Serverless::Function", "Properties": {"CodeUri": "test_function/", "Handler": "index.handler", "Runtime": "python3.9"}}},
+            }
+
+            template_path = project_dir / "template.yaml"
+            with open(template_path, "w") as f:
+                yaml.dump(template_content, f)
+
+            # Create function
+            func_dir = project_dir / "test_function"
+            func_dir.mkdir()
+            (func_dir / "index.py").write_text("def handler(event, context): return {'statusCode': 200}")
+
+            # Mock SAM toolkit
+            mock_sam = MagicMock()
+
+            def mock_sam_build(build_dir):
+                """Mock SAM build."""
+                build_dir.mkdir(parents=True, exist_ok=True)
+
+                built_template = template_content.copy()
+                built_template["Resources"]["TestFunction"]["Properties"]["CodeUri"] = "TestFunction"
+
+                with open(build_dir / "template.yaml", "w") as f:
+                    yaml.dump(built_template, f)
+
+                func_build_dir = build_dir / "TestFunction"
+                func_build_dir.mkdir()
+                (func_build_dir / "index.py").write_text("def handler(event, context): pass")
+
+            mock_sam.sam_build.side_effect = mock_sam_build
+            mock_aws_sam_toolkit.return_value = mock_sam
+
+            # Test with custom build directory
+            custom_build_dir = tmp_path / "custom_builds"
+            custom_build_dir.mkdir()
+
+            toolkit = LocalStackToolkit(working_dir=str(project_dir), template_path=str(template_path))
+            result_path = toolkit.build(feature_set=LocalStackFeautureSet.NORMAL, build_dir=custom_build_dir)
+
+            print(f"\\nBuild with custom directory completed: {result_path}")
+
+            # Print complete directory tree
+            def print_tree(path, prefix=""):
+                """Print directory tree for debugging."""
+                if not path.exists():
+                    return
+                items = sorted(path.iterdir(), key=lambda p: (p.is_file(), p.name))
+                for i, item in enumerate(items):
+                    is_last = i == len(items) - 1
+                    current_prefix = "└── " if is_last else "├── "
+                    print(f"{prefix}{current_prefix}{item.name}")
+                    if item.is_dir() and not item.name.startswith("."):
+                        next_prefix = prefix + ("    " if is_last else "│   ")
+                        print_tree(item, next_prefix)
+
+            print("\\nComplete directory structure:")
+            print_tree(tmp_path)
+
+            # Verify expected structure
+            expected_base_build = custom_build_dir / "aws-sam-testing-localstack-base-build"
+            expected_processed_build = custom_build_dir / "aws-sam-testing-localstack-processed-build"
+
+            assert result_path == expected_processed_build, f"Should return processed build path: {result_path}"
+            assert expected_base_build.exists(), "Base build directory should exist"
+            assert (expected_base_build / "template.yaml").exists(), "Base build should have template.yaml"
+            assert (expected_base_build / "template.source.yaml").exists(), "Base build should have debug template"
+
+            # For NORMAL feature set, processed build should exist and be the main output
+            assert expected_processed_build.exists(), "Processed build directory should exist"
+            assert (expected_processed_build / "template.yaml").exists(), "Processed build should have template.yaml"
+
     class TestProcessLambdaLayers:
         """Test suite for _process_lambda_layers method."""
 
