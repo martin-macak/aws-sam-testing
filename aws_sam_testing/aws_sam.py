@@ -10,6 +10,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Generator, Optional, Union, cast
 
+import pytest
 from samcli.commands.local.cli_common.invoke_context import InvokeContext
 
 from aws_sam_testing.cfn import CloudFormationTemplateProcessor
@@ -60,6 +61,7 @@ class LocalApi:
         port: Optional[int] = None,
         host: Optional[str] = None,
         parameters: Optional[Dict[str, Any]] = None,
+        pytest_request_context: pytest.FixtureRequest | None = None,
     ) -> None:
         self.ctx = ctx
         self.toolkit = toolkit
@@ -71,6 +73,7 @@ class LocalApi:
         self.host = host
         self.is_running = False
         self.server_pid: int | None = None
+        self.pytest_request_context = pytest_request_context
 
     def __enter__(self) -> "LocalApi":
         self.ctx.__enter__()
@@ -85,6 +88,13 @@ class LocalApi:
     def start(self) -> None:
         if self.is_running:
             return
+
+        if self.pytest_request_context is not None:
+
+            def _finalize_local_api() -> None:
+                self.stop()
+
+            self.pytest_request_context.addfinalizer(_finalize_local_api)
 
         if self.port is None:
             from aws_sam_testing.util import find_free_port
@@ -255,6 +265,7 @@ class AWSSAMToolkit(CloudFormationTool):
         parameters: Optional[Dict[str, Any]] = None,
         port: Optional[int] = None,
         host: Optional[str] = None,
+        pytest_request_context: pytest.FixtureRequest | None = None,
     ) -> Generator[list[LocalApi], None, None]:
         """Run a local API Gateway instance for testing.
 
@@ -312,6 +323,17 @@ class AWSSAMToolkit(CloudFormationTool):
 
         api_handlers = []
         context_resources = []
+
+        if pytest_request_context is not None:
+
+            def _finalize_context_resources() -> None:
+                for resource in context_resources:
+                    if isinstance(resource, MotoServer):
+                        resource.stop()
+                    elif isinstance(resource, LocalApi):
+                        resource.stop()
+
+            pytest_request_context.addfinalizer(_finalize_context_resources)
 
         if isolation_level == IsolationLevel.MOTO:
             moto_server = MotoServer()

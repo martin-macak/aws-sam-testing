@@ -22,7 +22,7 @@ class TestSimpleApiMotoIsolationResources:
         p_built_template = tmp_path / "template.yaml"
         assert p_built_template.exists()
 
-    def test_run_local_api_with_moto_isolation_resources(self, tmp_path):
+    def test_run_local_api_with_moto_isolation_resources(self, tmp_path, request):
         from pathlib import Path
 
         import requests
@@ -38,7 +38,7 @@ class TestSimpleApiMotoIsolationResources:
         toolkit.sam_build(build_dir=tmp_path)
 
         try:
-            with toolkit.run_local_api(isolation_level=IsolationLevel.MOTO) as apis:
+            with toolkit.run_local_api(isolation_level=IsolationLevel.MOTO, pytest_request_context=request) as apis:
                 assert len(apis) == 1
 
                 api = apis[0]

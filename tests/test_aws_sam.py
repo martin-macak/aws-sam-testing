@@ -226,7 +226,7 @@ Resources:
             yield
 
         @pytest.mark.slow
-        def test_run_local_api_no_api(self, tmp_path: Path):
+        def test_run_local_api_no_api(self, tmp_path: Path, request):
             """Test run_local_api when template has no API resources."""
             # Create a template without any API resources
             template_content = """
@@ -260,11 +260,11 @@ def handler(event, context):
 
             # Should raise ValueError when no API resources found
             with pytest.raises(ValueError, match="No API resources found in template"):
-                with toolkit.run_local_api():
+                with toolkit.run_local_api(pytest_request_context=request):
                     pass
 
         @pytest.mark.slow
-        def test_run_local_api_single_api(self, tmp_path: Path):
+        def test_run_local_api_single_api(self, tmp_path: Path, request):
             """Test run_local_api with a single API resource."""
             # Create a template with one API resource
             template_content = """
@@ -329,7 +329,7 @@ def handler(event, context):
                 print(built_template_path.read_text())
 
             # Run local API
-            with toolkit.run_local_api() as apis:
+            with toolkit.run_local_api(pytest_request_context=request) as apis:
                 # Should have exactly one API
                 assert len(apis) == 1
                 api = apis[0]
@@ -340,7 +340,7 @@ def handler(event, context):
                 assert api.host is not None
 
         @pytest.mark.slow
-        def test_run_local_api_multiple_apis(self, tmp_path: Path):
+        def test_run_local_api_multiple_apis(self, tmp_path: Path, request):
             """Test run_local_api with multiple API resources."""
             # Create a template with multiple API resources
             template_content = """
@@ -469,7 +469,7 @@ def handler(event, context):
                 print(built_template_path.read_text())
 
             # Run local APIs
-            with toolkit.run_local_api() as apis:
+            with toolkit.run_local_api(pytest_request_context=request) as apis:
                 # Should have exactly three APIs
                 assert len(apis) == 3
 
@@ -499,7 +499,7 @@ def handler(event, context):
                             print(api_template_path.read_text())
 
         @pytest.mark.slow
-        def test_run_local_api_with_parameters(self, tmp_path: Path):
+        def test_run_local_api_with_parameters(self, tmp_path: Path, request):
             """Test run_local_api with CloudFormation parameters."""
             # Create a template with parameters
             template_content = """
@@ -572,7 +572,7 @@ def handler(event, context):
             # Run local API with parameters
             parameters = {"StageName": "production", "ApiName": "ProductionAPI"}
 
-            with toolkit.run_local_api(parameters=parameters) as apis:
+            with toolkit.run_local_api(parameters=parameters, pytest_request_context=request) as apis:
                 # Should have exactly one API
                 assert len(apis) == 1
                 api = apis[0]
@@ -582,7 +582,7 @@ def handler(event, context):
                 assert api.parameters == parameters
 
         @pytest.mark.slow
-        def test_run_local_api_custom_port_host(self, tmp_path: Path):
+        def test_run_local_api_custom_port_host(self, tmp_path: Path, request):
             """Test run_local_api with custom port and host."""
             # Create a simple template with one API
             template_content = """
@@ -633,7 +633,7 @@ def handler(event, context):
             custom_port = 8080
             custom_host = "127.0.0.1"
 
-            with toolkit.run_local_api(port=custom_port, host=custom_host) as apis:
+            with toolkit.run_local_api(port=custom_port, host=custom_host, pytest_request_context=request) as apis:
                 # Should have exactly one API
                 assert len(apis) == 1
                 api = apis[0]
@@ -643,7 +643,7 @@ def handler(event, context):
                 assert api.host == custom_host
 
         @pytest.mark.slow
-        def test_run_local_api_invalid_port(self, tmp_path: Path):
+        def test_run_local_api_invalid_port(self, tmp_path: Path, request):
             """Test run_local_api with invalid port values."""
             # Create a minimal template
             template_content = """
@@ -666,16 +666,16 @@ Resources:
 
             # Test with port < 1
             with pytest.raises(ValueError, match="Port must be between 1 and 65535"):
-                with toolkit.run_local_api(port=0):
+                with toolkit.run_local_api(port=0, pytest_request_context=request):
                     pass
 
             # Test with port > 65535
             with pytest.raises(ValueError, match="Port must be between 1 and 65535"):
-                with toolkit.run_local_api(port=70000):
+                with toolkit.run_local_api(port=70000, pytest_request_context=request):
                     pass
 
         @pytest.mark.slow
-        def test_run_local_api_empty_host(self, tmp_path: Path):
+        def test_run_local_api_empty_host(self, tmp_path: Path, request):
             """Test run_local_api with empty host string."""
             # Create a minimal template
             template_content = """
@@ -698,10 +698,10 @@ Resources:
 
             # Test with empty host
             with pytest.raises(ValueError, match="Host cannot be empty"):
-                with toolkit.run_local_api(host=""):
+                with toolkit.run_local_api(host="", pytest_request_context=request):
                     pass
 
             # Test with whitespace-only host
             with pytest.raises(ValueError, match="Host cannot be empty"):
-                with toolkit.run_local_api(host="   "):
+                with toolkit.run_local_api(host="   ", pytest_request_context=request):
                     pass
