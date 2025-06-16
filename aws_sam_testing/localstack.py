@@ -54,29 +54,52 @@ class LocalStackToolkit(CloudFormationTool):
         feature_set: LocalStackFeautureSet = LocalStackFeautureSet.NORMAL,
         build_dir: Path | None = None,
     ) -> Path:
-        """_summary_
+        """
+        Builds a new AWS SAM build that can be executed in localstack.
+
+        If feature_set is LocalStackFeautureSet.NORMAL, the build will be executed in localstack without PRO features.
+        If feature_set is LocalStackFeautureSet.PRO, the build will be executed in localstack with PRO features.
+
+        First the source template is used to create regular AWS SAM build.
+        Then the AWS sam build is processed according to the feature set.
+        Then the localstack is started and the processed build is deployed via SAM deploy to localstack.
+
+        This function creates two builds:
+        - base build: the base build that is used to create the processed build
+        - processed build: the processed build that is used to deploy to localstack
+        The base build will be created in build_dir/aws-sam-testing-localstack-base-build
+        The processed build will be created in build_dir/aws-sam-testing-localstack-processed-build
+        If the build dir is not provided, then the default <project_root>/.aws-sam/ base dir is used.
+        For example:
+            <project_root>/.aws-sam/aws-sam-testing-localstack-base-build
+            <project_root>/.aws-sam/aws-sam-testing-localstack-processed-build
 
         Args:
             feature_set (LocalStackFeautureSet, optional): _description_. Defaults to LocalStackFeautureSet.NORMAL.
             build_dir (Path | None, optional): _description_. Defaults to None.
 
         Returns:
-            Path: _description_
+            Path: The path to the processed build directory.
         """
         import shutil
 
         from aws_sam_testing.aws_sam import AWSSAMToolkit
         from aws_sam_testing.cfn import dump_yaml
 
-        base_build_dir = build_dir
+        # localstack_base_build_dir is the directory where the base build is stored
+        # localstack_processed_build_dir is the directory where the processed build is stored
+        # processed_build is valid AWS SAM build with certain changes that match the supported localstack features
+        localstack_base_build_dir = None
+        localstack_processed_build_dir = None
         if build_dir is None:
-            base_build_dir = Path(self.working_dir) / ".aws-sam"
-        elif isinstance(base_build_dir, str):
-            base_build_dir = Path(build_dir)
+            localstack_base_build_dir = Path(self.working_dir) / ".aws-sam" / "aws-sam-testing-localstack-base-build"
+            localstack_processed_build_dir = Path(self.working_dir) / ".aws-sam" / "aws-sam-testing-localstack-processed-build"
+        else:
+            localstack_base_build_dir = build_dir / "aws-sam-testing-localstack-base-build"
+            localstack_processed_build_dir = build_dir / "aws-sam-testing-localstack-processed-build"
 
-        assert base_build_dir is not None
-        localstack_build_dir = base_build_dir / ".aws-sam" / "aws-sam-testing-localstack-build"
-        localstack_build_dir.mkdir(parents=True, exist_ok=True)
+        assert localstack_base_build_dir is not None
+        assert localstack_processed_build_dir is not None
 
         processor = LocalStackCloudFormationTemplateProcessor(
             template=self.template,
@@ -86,39 +109,46 @@ class LocalStackToolkit(CloudFormationTool):
             processor.remove_pro_resources()
 
         template = processor.processed_template
-        sam_build_dir: Path | None = None
 
-        localstack_template_path = base_build_dir / "template.localstack.yaml"
+        # this is for the build
+        # we need to put the template next to the source template so all relative paths in the template are correct
+        # this solution does not require rebasing
+        # we need to remove the file after the build is done
+        localstack_source_template_path = localstack_base_build_dir.parent / "template.localstack.yaml"
         try:
-            dump_yaml(template, stream=localstack_template_path)
-            dump_yaml(template, stream=localstack_build_dir / "template.source.yaml")
+            # store the template in the build directory next to the source template
+            # relative paths in the template will be correct
+            dump_yaml(template, stream=localstack_source_template_path)
+            # for debugging purposes, save the source template
+            dump_yaml(template, stream=localstack_base_build_dir / "template.source.yaml")
 
+            # run the AWS SAM build
+            # this creates the base build
             sam_toolkit = AWSSAMToolkit(
                 working_dir=self.working_dir,
-                template_path=self.template_path,
+                template_path=localstack_source_template_path,
             )
-
-            sam_build_dir = sam_toolkit.sam_build(
-                build_dir=localstack_build_dir,
+            sam_toolkit.sam_build(
+                build_dir=localstack_base_build_dir,
             )
         finally:
             # delete the file
-            localstack_template_path.unlink()
-
-        assert sam_build_dir is not None
+            localstack_source_template_path.unlink()
 
         if feature_set == LocalStackFeautureSet.NORMAL:
+            # process the lambda layers
+            # this creates new AWS SAM build with flattened layers
             self._process_lambda_layers(
-                source_template_path=sam_build_dir / "template.yaml",
-                build_dir=localstack_build_dir,
+                source_template_path=localstack_base_build_dir / "template.yaml",
+                build_dir=localstack_base_build_dir,
                 flatten_layers=True,
-                layer_cache_dir=base_build_dir / ".aws-sam" / "aws-sam-testing-localstack-layers",
+                layer_cache_dir=localstack_base_build_dir / "tmp" / "aws-sam-testing-localstack-layers",
             )
         else:
             # copy the source build into the localstack build
-            shutil.copytree(sam_build_dir, localstack_build_dir, dirs_exist_ok=True)
+            shutil.copytree(localstack_base_build_dir, localstack_processed_build_dir, dirs_exist_ok=True)
 
-        return localstack_build_dir
+        return localstack_base_build_dir
 
     def _process_lambda_layers(
         self,
@@ -251,7 +281,12 @@ class LocalStackToolkit(CloudFormationTool):
                     # This is a local layer reference, handle it differently
                     local_layer_id = self._get_ref_value(layer_ref)
                     if local_layer_id:
-                        self._copy_local_layer(source_template_path.parent, function_build_dir, local_layer_id, template)
+                        self._copy_local_layer(
+                            source_template_path.parent,
+                            function_build_dir,
+                            local_layer_id,
+                            template,
+                        )
                         layers_to_remove.add(local_layer_id)
                 else:
                     # Download and cache the layer if needed
@@ -407,7 +442,10 @@ class LocalStackToolkit(CloudFormationTool):
             return
 
         layer_resource = template["Resources"][layer_id]
-        if layer_resource.get("Type") not in ["AWS::Lambda::LayerVersion", "AWS::Serverless::LayerVersion"]:
+        if layer_resource.get("Type") not in [
+            "AWS::Lambda::LayerVersion",
+            "AWS::Serverless::LayerVersion",
+        ]:
             return
 
         properties = layer_resource.get("Properties", {})
@@ -590,7 +628,13 @@ class LocalStackToolkit(CloudFormationTool):
                             shutil.copy2(item, function_dir)
 
                 # Also check for direct site-packages
-                for py_version in ["python3.8", "python3.9", "python3.10", "python3.11", "python3.12"]:
+                for py_version in [
+                    "python3.8",
+                    "python3.9",
+                    "python3.10",
+                    "python3.11",
+                    "python3.12",
+                ]:
                     site_packages = temp_extract / "python" / "lib" / py_version / "site-packages"
                     if site_packages.exists():
                         for item in site_packages.iterdir():
