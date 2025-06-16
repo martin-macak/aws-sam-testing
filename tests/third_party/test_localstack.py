@@ -297,7 +297,7 @@ def lambda_handler(event, context):
                 use_json=False,
                 force_upload=True,
                 no_progressbar=True,
-                on_deploy=True,
+                on_deploy=False,
                 region="us-east-1",
                 metadata=None,
                 profile="default",

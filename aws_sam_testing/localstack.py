@@ -1,6 +1,9 @@
+from contextlib import contextmanager
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Generator
+
+import pytest
 
 from aws_sam_testing.cfn import CloudFormationTemplateProcessor
 from aws_sam_testing.core import CloudFormationTool
@@ -12,9 +15,20 @@ class LocalStackFeautureSet(Enum):
 
 
 class LocalStack:
-    def __init__(self):
+    def __init__(
+        self,
+        region: str = "us-east-1",
+        pytest_request_context: pytest.FixtureRequest | None = None,
+    ):
+        from docker.models.containers import Container
+
+        self.region = region
         self.is_running = False
         self.moto_server = None
+        self.pytest_request_context = pytest_request_context
+        self.host: str | None = None
+        self.port: int | None = None
+        self.container: Container | None = None
 
     def __enter__(self):
         self.start()
@@ -26,6 +40,9 @@ class LocalStack:
     def start(self):
         if self.is_running:
             return
+
+        if self.pytest_request_context is not None:
+            self.pytest_request_context.addfinalizer(self.stop)
 
         self._do_start()
         self.is_running = True
@@ -42,10 +59,67 @@ class LocalStack:
         self.start()
 
     def _do_start(self):
-        pass
+        from docker import DockerClient
+
+        from aws_sam_testing.util import find_free_port
+
+        port = find_free_port()
+        self.host = "localhost"
+        self.port = port
+
+        docker_client = DockerClient.from_env()
+        container = docker_client.containers.run(
+            "localstack/localstack:latest",
+            ports={"4566/tcp": 4566},
+            detach=True,
+            privileged=True,
+            volumes={"/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"}},
+        )
+        self.container = container
+        self.wait_for_localstack_to_be_ready()
 
     def _do_stop(self):
-        pass
+        if self.container is not None:
+            self.container.stop()
+            self.container.remove()
+
+    def wait_for_localstack_to_be_ready(self):
+        import socket
+        import time
+
+        import boto3
+
+        from aws_sam_testing.aws_sam import set_environment
+
+        if self.host is None or self.port is None:
+            raise RuntimeError("LocalStack is not running")
+
+        max_attempts = 20
+        for attempt in range(max_attempts):
+            try:
+                with socket.create_connection((self.host, self.port), timeout=2):
+                    break
+            except (OSError, ConnectionRefusedError):
+                if attempt == max_attempts - 1:
+                    raise RuntimeError(f"LocalStack did not start on {self.host}:{self.port} after {max_attempts} seconds")
+                time.sleep(1)
+
+        # Additional check: use boto3 to verify S3 is available
+        for attempt in range(max_attempts):
+            try:
+                with set_environment(
+                    AWS_ENDPOINT_URL=f"http://{self.host}:{self.port}",
+                ):
+                    s3 = boto3.client(
+                        "s3",
+                        region_name=self.region,
+                    )
+                    s3.list_buckets()
+                break
+            except Exception:
+                if attempt == max_attempts - 1:
+                    raise RuntimeError("LocalStack S3 API did not become available after port was reachable.")
+                time.sleep(1)
 
 
 class LocalStackToolkit(CloudFormationTool):
@@ -122,7 +196,10 @@ class LocalStackToolkit(CloudFormationTool):
             dump_yaml(template, stream=localstack_source_template_path.open("w"))
             # for debugging purposes, save the source template
             localstack_base_build_dir.mkdir(parents=True, exist_ok=True)
-            dump_yaml(template, stream=(localstack_base_build_dir / "template.source.yaml").open("w"))
+            dump_yaml(
+                template,
+                stream=(localstack_base_build_dir / "template.source.yaml").open("w"),
+            )
 
             # run the AWS SAM build
             # this creates the base build
@@ -148,9 +225,55 @@ class LocalStackToolkit(CloudFormationTool):
             )
         else:
             # copy the source build into the localstack build
-            shutil.copytree(localstack_base_build_dir, localstack_processed_build_dir, dirs_exist_ok=True)
+            shutil.copytree(
+                localstack_base_build_dir,
+                localstack_processed_build_dir,
+                dirs_exist_ok=True,
+            )
 
         return localstack_processed_build_dir
+
+    @contextmanager
+    def run_localstack(
+        self,
+        build_dir: Path,
+        template_path: Path | None,
+        region: str | None = None,
+        pytest_request_context: pytest.FixtureRequest | None = None,
+    ) -> Generator[LocalStack, None, None]:
+        import os
+
+        from aws_sam_testing.aws_sam import AWSSAMToolkit
+
+        if template_path is None:
+            template_path = self.template_path
+        else:
+            template_path = Path(template_path)
+        assert template_path is not None
+        if not template_path.exists():
+            raise ValueError(f"Template path {template_path} does not exist")
+
+        if region is None:
+            region = os.environ.get("AWS_REGION", "us-east-1")
+
+        with LocalStack(
+            region=region,
+            pytest_request_context=pytest_request_context,
+        ) as localstack:
+            localstack.start()
+            localstack.wait_for_localstack_to_be_ready()
+
+            sam_toolkit = AWSSAMToolkit(
+                working_dir=build_dir,
+                template_path=template_path,
+            )
+            sam_toolkit.sam_deploy(
+                build_dir=build_dir,
+                template_path=template_path,
+                aws_endpoint_url=f"http://{localstack.host}:{localstack.port}",
+            )
+
+            yield localstack
 
     def _process_lambda_layers(
         self,
