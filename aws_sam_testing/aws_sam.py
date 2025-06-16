@@ -263,6 +263,218 @@ class AWSSAMToolkit(CloudFormationTool):
         # Return the build directory
         return build_dir
 
+    def sam_deploy(
+        self,
+        stack_name: str | None = None,
+        s3_bucket: str | None = None,
+        s3_prefix: str | None = None,
+        image_repository: str | None = None,
+        image_repositories: dict[str, str] | None = None,
+        capabilities: list[str] | None = None,
+        parameter_overrides: dict[str, str] | None = None,
+        role_arn: str | None = None,
+        notification_arns: list[str] | None = None,
+        tags: dict[str, str] | None = None,
+        kms_key_id: str | None = None,
+        no_execute_changeset: bool = False,
+        no_progressbar: bool = True,
+        fail_on_empty_changeset: bool = False,
+        confirm_changeset: bool = False,
+        disable_rollback: bool = False,
+        on_failure: str | None = None,
+        force_upload: bool = False,
+        signing_profiles: dict[str, str] | None = None,
+        region: str | None = None,
+        profile: str | None = None,
+        use_json: bool = False,
+        metadata: dict[str, str] | None = None,
+        poll_delay: float = 5.0,
+        max_wait_duration: int = 60,
+        boto3_session: Any | None = None,
+    ) -> None:
+        """
+        Deploy the SAM stack using direct API calls.
+
+        This method packages and deploys the SAM application to AWS CloudFormation.
+        Environment variables are modified only within the scope of this function.
+
+        Args:
+            stack_name: Name of the CloudFormation stack (defaults to "aws-sam-testing-stack")
+            s3_bucket: S3 bucket for uploading artifacts (defaults to "aws-sam-testing-package", created if needed)
+            s3_prefix: S3 prefix for uploaded artifacts
+            image_repository: ECR repository URI for images
+            image_repositories: Mapping of function logical ID to ECR repository URI
+            capabilities: List of capabilities (e.g., CAPABILITY_IAM)
+            parameter_overrides: Parameter overrides for the stack
+            role_arn: IAM role ARN for CloudFormation to assume
+            notification_arns: SNS topic ARNs for stack notifications
+            tags: Tags to apply to the stack
+            kms_key_id: KMS key ID for S3 encryption
+            no_execute_changeset: If True, create changeset but don't execute it
+            no_progressbar: If True, disable progress bars
+            fail_on_empty_changeset: If True, fail when changeset is empty
+            confirm_changeset: If True, prompt for changeset confirmation
+            disable_rollback: If True, disable rollback on failure
+            on_failure: Action on failure (ROLLBACK, DELETE, or DO_NOTHING)
+            force_upload: If True, force re-upload of artifacts
+            signing_profiles: Code signing profiles
+            region: AWS region (defaults to environment variable or "us-east-1")
+            profile: AWS profile (defaults to environment variable)
+            use_json: If True, use JSON for template format
+            metadata: Metadata to attach to uploaded artifacts
+            poll_delay: Delay in seconds between CloudFormation stack status checks
+            max_wait_duration: Maximum time in minutes to wait for deployment
+            boto3_session: Optional boto3 Session to use for AWS API calls
+        """
+        import os
+        from contextlib import contextmanager
+
+        import boto3
+        from botocore.exceptions import ClientError
+        from samcli.commands.deploy.deploy_context import DeployContext
+        from samcli.commands.package.package_context import PackageContext
+        from samcli.lib.utils import osutils
+
+        # Use values from samconfig if not provided
+        final_stack_name = stack_name or "aws-sam-testing-stack"
+        final_parameter_overrides = parameter_overrides or {}
+        final_region = region or os.environ.get("AWS_REGION", "us-east-1")
+        final_profile = profile or os.environ.get("AWS_PROFILE")
+        final_capabilities = capabilities or ["CAPABILITY_IAM", "CAPABILITY_NAMED_IAM"]
+        final_s3_bucket = s3_bucket or "aws-sam-testing-package"
+
+        # Create a context manager to handle environment variables
+        @contextmanager
+        def environment_variables():
+            """Context manager to temporarily set environment variables."""
+            original_env = {}
+            env_vars = {}
+
+            if final_region:
+                env_vars["AWS_DEFAULT_REGION"] = final_region
+            if final_profile:
+                env_vars["AWS_PROFILE"] = final_profile
+
+            # Set SAM_CLI_POLL_DELAY if different from default
+            if poll_delay != 5.0:
+                env_vars["SAM_CLI_POLL_DELAY"] = str(poll_delay)
+
+            # Save original values and set new ones
+            for key, value in env_vars.items():
+                original_env[key] = os.environ.get(key)
+                os.environ[key] = value
+
+            try:
+                yield
+            finally:
+                # Restore original values
+                for key, original_value in original_env.items():
+                    if original_value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = original_value
+
+        # Get the template file path
+        template_file = str(self.template_path)
+
+        # Check if we should use the build directory template
+        build_template = Path(self.working_dir) / ".aws-sam" / "aws-sam-testing-build" / "template.yaml"
+        if build_template.exists():
+            template_file = str(build_template)
+
+        # Ensure the template exists
+        if not os.path.exists(template_file):
+            raise FileNotFoundError(f"Template file not found: {template_file}")
+
+        # Create S3 client using provided session or default
+        if boto3_session:
+            s3_client = boto3_session.client("s3", region_name=final_region)
+        else:
+            s3_client = boto3.client("s3", region_name=final_region)
+
+        # Create S3 bucket if it doesn't exist and we're using the default bucket
+        if not s3_bucket:  # Using default bucket
+            try:
+                # Check if bucket exists
+                s3_client.head_bucket(Bucket=final_s3_bucket)
+                logger.info(f"Using existing S3 bucket: {final_s3_bucket}")
+            except ClientError as e:
+                error_code = e.response.get("Error", {}).get("Code", "")
+                if error_code == "404":
+                    # Bucket doesn't exist, create it
+                    logger.info(f"Creating S3 bucket: {final_s3_bucket}")
+                    try:
+                        if final_region == "us-east-1":
+                            # us-east-1 doesn't accept LocationConstraint
+                            s3_client.create_bucket(Bucket=final_s3_bucket)
+                        else:
+                            s3_client.create_bucket(
+                                Bucket=final_s3_bucket,
+                                CreateBucketConfiguration={"LocationConstraint": final_region},  # type: ignore
+                            )
+                        logger.info(f"S3 bucket created successfully: {final_s3_bucket}")
+                    except ClientError as create_error:
+                        logger.error(f"Failed to create S3 bucket: {create_error}")
+                        raise
+                else:
+                    # Some other error occurred
+                    logger.error(f"Error checking S3 bucket: {e}")
+                    raise
+
+        with environment_variables():
+            # Package and deploy within a temporary file context
+            with osutils.tempfile_platform_independent() as output_template_file:
+                # Package the template
+                with PackageContext(
+                    template_file=template_file,
+                    s3_bucket=final_s3_bucket,
+                    s3_prefix=s3_prefix,
+                    image_repository=image_repository,
+                    image_repositories=image_repositories,
+                    output_template_file=output_template_file.name,
+                    kms_key_id=kms_key_id,
+                    use_json=use_json,
+                    force_upload=force_upload,
+                    no_progressbar=no_progressbar,
+                    metadata=metadata,
+                    on_deploy=True,
+                    region=final_region,
+                    profile=final_profile,
+                    signing_profiles=signing_profiles,
+                    parameter_overrides=final_parameter_overrides,
+                ) as package_context:
+                    package_context.run()
+
+                # Deploy the packaged template
+                with DeployContext(
+                    template_file=output_template_file.name,
+                    stack_name=final_stack_name,
+                    s3_bucket=final_s3_bucket,
+                    image_repository=image_repository,
+                    image_repositories=image_repositories,
+                    force_upload=force_upload,
+                    no_progressbar=no_progressbar,
+                    s3_prefix=s3_prefix,
+                    kms_key_id=kms_key_id,
+                    parameter_overrides=final_parameter_overrides,
+                    capabilities=final_capabilities,
+                    no_execute_changeset=no_execute_changeset,
+                    role_arn=role_arn,
+                    notification_arns=notification_arns or [],
+                    fail_on_empty_changeset=fail_on_empty_changeset,
+                    tags=tags or {},
+                    region=final_region,
+                    profile=final_profile,
+                    confirm_changeset=confirm_changeset,
+                    signing_profiles=signing_profiles,
+                    use_changeset=True,
+                    disable_rollback=disable_rollback,
+                    poll_delay=poll_delay,
+                    on_failure=on_failure,
+                    max_wait_duration=max_wait_duration,
+                ) as deploy_context:
+                    deploy_context.run()
+
     @contextmanager
     def run_local_api(
         self,
