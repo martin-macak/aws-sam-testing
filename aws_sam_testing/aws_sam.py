@@ -142,6 +142,7 @@ class LocalApi:
         from tempfile import TemporaryDirectory
 
         from samcli.commands.local.lib.local_api_service import LocalApiService
+        from samcli.local.docker.exceptions import ProcessSigTermException
 
         with TemporaryDirectory() as static_dir:
             service = LocalApiService(
@@ -156,7 +157,10 @@ class LocalApi:
             pid = os.fork()
             if pid == 0:
                 logger.info(f"Starting local API server at http://{self.host}:{self.port}")
-                service.start()
+                try:
+                    service.start()
+                except ProcessSigTermException:
+                    pass
             else:
                 self.server_pid = pid
 
@@ -169,7 +173,8 @@ class LocalApi:
 
         if self.server_pid is not None:
             try:
-                os.kill(self.server_pid, signal.SIGTERM)
+                os.kill(self.server_pid, signal.SIGKILL)
+                os.waitpid(self.server_pid, 0)
             except Exception:
                 logger.warning("Failed to kill server process", exc_info=True)
 

@@ -138,7 +138,8 @@ def test_sam_local_api(tmp_path: Path):
                 result = sock.connect_ex(("0.0.0.0", port))
                 assert result == 0, f"Failed to connect to 0.0.0.0:8000, error code: {result}"
                 sock.close()
-                os.kill(pid, signal.SIGTERM)
+                os.kill(pid, signal.SIGKILL)
+                os.waitpid(pid, 0)
 
 
 @pytest.mark.slow
@@ -308,7 +309,8 @@ def handler(event, context):
                     finally:
                         if pid != 0:
                             time.sleep(1)
-                            os.kill(pid, signal.SIGTERM)
+                            os.kill(pid, signal.SIGKILL)
+                            os.waitpid(pid, 0)
     except RequestException as e:
         print(f"Error: {e}")
     except OSError as e:
