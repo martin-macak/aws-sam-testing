@@ -4,6 +4,8 @@ from typing import Generator
 import boto3
 import pytest
 
+from aws_sam_testing.aws_sam import IsolationLevel
+
 
 class AWSTestContext:
     def __init__(
@@ -13,6 +15,7 @@ class AWSTestContext:
         self.pytest_request_context: pytest.FixtureRequest = pytest_request_context
         self.project_root: Path | None = None
         self.template_name: str = "template.yaml"
+        self.isolation_level: IsolationLevel = IsolationLevel.NONE
 
     def set_project_root(self, path: Path) -> None:
         self.project_root = path
@@ -29,6 +32,15 @@ class AWSTestContext:
                 template_name=self.template_name,
             )
         return self.project_root
+
+    def get_template_path(self) -> Path:
+        return self.get_project_root() / self.template_name
+
+    def set_api_isolation_level(self, isolation_level: IsolationLevel) -> None:
+        self.isolation_level = isolation_level
+
+    def get_api_isolation_level(self) -> IsolationLevel:
+        return self.isolation_level
 
 
 @pytest.fixture(scope="session", autouse=True)

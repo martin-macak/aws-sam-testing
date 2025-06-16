@@ -7,6 +7,13 @@ from aws_sam_testing.pytest_addin.aws_context import AWSTestContext
 
 
 class TestAWSContext:
+    """
+    This test case shows how it's possible to modify the project root and the template name
+    for the AWS context.
+
+    All tests within given session will have the same project root and template name.
+    """
+
     @pytest.fixture(scope="session")
     def prepare_filesystem(self) -> Generator[tuple[Path, Path], None, None]:
         from tempfile import TemporaryDirectory
