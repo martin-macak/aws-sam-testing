@@ -581,23 +581,23 @@ class TestStackToolkit:
 
 
 class TestLocalStackCloudFormationTemplateProcessor:
-    def test_remove_non_pro_resources_empty_template(self):
+    def test_remove_pro_resources_empty_template(self):
         """Test removing PRO resources from an empty template."""
         template = {}
         processor = LocalStackCloudFormationTemplateProcessor(template)
-        processor.remove_non_pro_resources()
+        processor.remove_pro_resources()
 
         assert processor.processed_template == {}
 
-    def test_remove_non_pro_resources_no_resources_section(self):
+    def test_remove_pro_resources_no_resources_section(self):
         """Test removing PRO resources when template has no Resources section."""
         template = {"AWSTemplateFormatVersion": "2010-09-09", "Description": "Test template"}
         processor = LocalStackCloudFormationTemplateProcessor(template)
-        processor.remove_non_pro_resources()
+        processor.remove_pro_resources()
 
         assert processor.processed_template == template
 
-    def test_remove_non_pro_resources_no_pro_resources(self):
+    def test_remove_pro_resources_no_pro_resources(self):
         """Test removing PRO resources when template has only community resources."""
         template = {
             "Resources": {
@@ -610,7 +610,7 @@ class TestLocalStackCloudFormationTemplateProcessor:
             }
         }
         processor = LocalStackCloudFormationTemplateProcessor(template)
-        processor.remove_non_pro_resources()
+        processor.remove_pro_resources()
 
         # All resources should remain
         assert len(processor.processed_template["Resources"]) == 3
@@ -627,7 +627,7 @@ class TestLocalStackCloudFormationTemplateProcessor:
             }
         }
         processor = LocalStackCloudFormationTemplateProcessor(template)
-        processor.remove_non_pro_resources()
+        processor.remove_pro_resources()
 
         # Only S3 bucket should remain
         assert len(processor.processed_template["Resources"]) == 1
@@ -649,7 +649,7 @@ class TestLocalStackCloudFormationTemplateProcessor:
             }
         }
         processor = LocalStackCloudFormationTemplateProcessor(template)
-        processor.remove_non_pro_resources()
+        processor.remove_pro_resources()
 
         # Only S3 bucket and Lambda function should remain
         assert len(processor.processed_template["Resources"]) == 2
@@ -678,7 +678,7 @@ class TestLocalStackCloudFormationTemplateProcessor:
             }
         }
         processor = LocalStackCloudFormationTemplateProcessor(template)
-        processor.remove_non_pro_resources()
+        processor.remove_pro_resources()
 
         # All Cognito resources should be removed
         assert "MyCognitoPool" not in processor.processed_template["Resources"]
@@ -700,7 +700,7 @@ class TestLocalStackCloudFormationTemplateProcessor:
             },
         }
         processor = LocalStackCloudFormationTemplateProcessor(template)
-        processor.remove_non_pro_resources()
+        processor.remove_pro_resources()
 
         # Only bucket-related output should remain
         assert len(processor.processed_template["Outputs"]) == 1
@@ -726,7 +726,7 @@ class TestLocalStackCloudFormationTemplateProcessor:
             }
         }
         processor = LocalStackCloudFormationTemplateProcessor(template)
-        processor.remove_non_pro_resources()
+        processor.remove_pro_resources()
 
         # API Gateway V2 should be removed
         assert "MyApiV2" not in processor.processed_template["Resources"]
@@ -753,7 +753,7 @@ class TestLocalStackCloudFormationTemplateProcessor:
             }
         }
         processor = LocalStackCloudFormationTemplateProcessor(template)
-        processor.remove_non_pro_resources()
+        processor.remove_pro_resources()
 
         # All ECS resources should be removed (they're all PRO)
         assert "MyCluster" not in processor.processed_template["Resources"]

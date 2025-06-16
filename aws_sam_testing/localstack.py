@@ -54,6 +54,17 @@ class LocalStackToolkit(CloudFormationTool):
         feature_set: LocalStackFeautureSet = LocalStackFeautureSet.NORMAL,
         build_dir: Path | None = None,
     ) -> Path:
+        """_summary_
+
+        Args:
+            feature_set (LocalStackFeautureSet, optional): _description_. Defaults to LocalStackFeautureSet.NORMAL.
+            build_dir (Path | None, optional): _description_. Defaults to None.
+
+        Returns:
+            Path: _description_
+        """
+        import shutil
+
         from aws_sam_testing.aws_sam import AWSSAMToolkit
         from aws_sam_testing.cfn import dump_yaml
 
@@ -72,7 +83,7 @@ class LocalStackToolkit(CloudFormationTool):
         )
 
         if feature_set == LocalStackFeautureSet.NORMAL:
-            processor.remove_non_pro_resources()
+            processor.remove_pro_resources()
 
         template = processor.processed_template
         sam_build_dir: Path | None = None
@@ -103,6 +114,9 @@ class LocalStackToolkit(CloudFormationTool):
                 flatten_layers=True,
                 layer_cache_dir=base_build_dir / ".aws-sam" / "aws-sam-testing-localstack-layers",
             )
+        else:
+            # copy the source build into the localstack build
+            shutil.copytree(sam_build_dir, localstack_build_dir, dirs_exist_ok=True)
 
         return localstack_build_dir
 
@@ -838,7 +852,7 @@ class LocalStackCloudFormationTemplateProcessor(CloudFormationTemplateProcessor)
         "AWS::XRay::SamplingRule",
     ]
 
-    def remove_non_pro_resources(self):
+    def remove_pro_resources(self):
         """
         Remove all resources that require LocalStack PRO from the template.
         This includes removing the resources and all their dependencies.
