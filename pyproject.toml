@@ -21,6 +21,8 @@ classifiers = [
 aws_context = "aws_sam_testing.pytest_addin.aws_context"
 aws_lambda_context = "aws_sam_testing.pytest_addin.aws_lambda_context"
 aws_resources = "aws_sam_testing.pytest_addin.aws_resources"
+aws_sam = "aws_sam_testing.pytest_addin.aws_sam"
+aws_localstack = "aws_sam_testing.pytest_addin.aws_localstack"
 
 [tool.hatch.version]
 source = "uv-dynamic-versioning"
