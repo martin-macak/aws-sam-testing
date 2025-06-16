@@ -1,5 +1,6 @@
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
 from aws_sam_testing.cfn import CloudFormationTemplateProcessor
 from aws_sam_testing.core import CloudFormationTool
@@ -174,8 +175,474 @@ class LocalStackToolkit(CloudFormationTool):
         Returns:
             Path: The path to the new build directory.
         """
+        import shutil
+
+        # If not flattening layers, just copy the source to the build dir
+        if not flatten_layers:
+            if source_template_path.parent != build_dir:
+                shutil.copytree(source_template_path.parent, build_dir, dirs_exist_ok=True)
+            return build_dir
+
+        # Set up layer cache directory
+        if layer_cache_dir is None:
+            layer_cache_dir = build_dir / ".layer-cache"
+        layer_cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # Load the template
+        from aws_sam_testing.cfn import dump_yaml, load_yaml_file
+
+        template = load_yaml_file(str(source_template_path))
+        processor = CloudFormationTemplateProcessor(template)
+        template = processor.processed_template
+
+        # Create build directory structure
+        build_dir.mkdir(parents=True, exist_ok=True)
+
+        # Find all Lambda and Serverless functions
+        lambda_functions = processor.find_resources_by_type("AWS::Lambda::Function")
+        serverless_functions = processor.find_resources_by_type("AWS::Serverless::Function")
+        all_functions = lambda_functions + serverless_functions
+
+        # Track which layers we've processed
+        processed_layers = {}
+        layers_to_remove = set()
+
+        # Process each function
+        for logical_id, function_data in all_functions:
+            properties = function_data.get("Properties", {})
+
+            # Skip if not a Zip package type
+            if properties.get("PackageType") == "Image":
+                continue
+
+            # Get layers for this function
+            layers = properties.get("Layers", [])
+            if not layers:
+                # No layers to process, just copy the function code
+                self._copy_function_code(source_template_path.parent, build_dir, logical_id, properties)
+                continue
+
+            # Create function directory in build
+            function_build_dir = build_dir / logical_id
+            function_build_dir.mkdir(parents=True, exist_ok=True)
+
+            # Process layers in order (they are applied in order)
+            for layer_ref in layers:
+                layer_arn = self._resolve_layer_arn(layer_ref, template)
+                if not layer_arn:
+                    continue
+
+                # Check if this is a local layer reference
+                if layer_arn.startswith("!"):
+                    # This is a local layer reference, handle it differently
+                    local_layer_id = self._get_ref_value(layer_ref)
+                    if local_layer_id:
+                        self._copy_local_layer(source_template_path.parent, function_build_dir, local_layer_id, template)
+                        layers_to_remove.add(local_layer_id)
+                else:
+                    # Download and cache the layer if needed
+                    if layer_arn not in processed_layers:
+                        layer_path = self._download_and_cache_layer(layer_arn, layer_cache_dir)
+                        processed_layers[layer_arn] = layer_path
+
+                    # Extract layer contents to function directory
+                    if processed_layers[layer_arn]:
+                        self._extract_layer_to_function(processed_layers[layer_arn], function_build_dir)
+
+            # Copy the function's own code on top of layers
+            self._copy_function_code(source_template_path.parent, function_build_dir, logical_id, properties)
+
+            # Remove Layers property from the function
+            if "Layers" in processor.processed_template["Resources"][logical_id]["Properties"]:
+                del processor.processed_template["Resources"][logical_id]["Properties"]["Layers"]
+
+        # Remove layer resources that were flattened
+        for layer_id in layers_to_remove:
+            if layer_id in processor.processed_template.get("Resources", {}):
+                processor.remove_resource(layer_id, auto_remove_dependencies=False)
+
+        # Save the modified template
+        output_template_path = build_dir / "template.yaml"
+        dump_yaml(processor.processed_template, stream=output_template_path.open("w"))
 
         return build_dir
+
+    def _resolve_layer_arn(self, layer_ref: Any, template: dict) -> str | None:
+        """Resolve a layer reference to its ARN or a special reference identifier.
+
+        This method handles different types of layer references that can appear in
+        CloudFormation templates:
+
+        1. Direct ARN strings: "arn:aws:lambda:region:account:layer:name:version"
+        2. CloudFormation Ref: {"Ref": "LayerLogicalId"}
+        3. CloudFormation GetAtt: {"Fn::GetAtt": ["LayerLogicalId", "Arn"]}
+
+        Args:
+            layer_ref: The layer reference from the template. Can be:
+                - str: Direct ARN string
+                - dict: CloudFormation intrinsic function (Ref, GetAtt, etc.)
+            template: The CloudFormation template dict (currently unused but kept for
+                future extensions)
+
+        Returns:
+            str | None:
+                - For direct ARNs: returns the ARN string as-is
+                - For Ref: returns "!Ref:LogicalId" to indicate a local reference
+                - For GetAtt: returns None (not currently supported)
+                - For other types: returns None
+
+        Examples:
+            >>> toolkit._resolve_layer_arn("arn:aws:lambda:us-east-1:123:layer:my-layer:1", {})
+            'arn:aws:lambda:us-east-1:123:layer:my-layer:1'
+
+            >>> toolkit._resolve_layer_arn({"Ref": "MyLayer"}, {})
+            '!Ref:MyLayer'
+        """
+        if isinstance(layer_ref, str):
+            return layer_ref
+        elif isinstance(layer_ref, dict):
+            if "Ref" in layer_ref:
+                # Local layer reference
+                return f"!Ref:{layer_ref['Ref']}"
+            elif "Fn::GetAtt" in layer_ref:
+                # GetAtt reference
+                return None  # Not supported for now
+        return None
+
+    def _get_ref_value(self, layer_ref: Any) -> str | None:
+        """Extract the logical ID from a CloudFormation Ref.
+
+        This method extracts the logical ID from various forms of CloudFormation
+        references, supporting both standard CloudFormation syntax and our internal
+        representation.
+
+        Args:
+            layer_ref: The layer reference to extract from. Can be:
+                - dict: {"Ref": "LogicalId"} - Standard CloudFormation Ref
+                - str: "!Ref:LogicalId" - Internal representation from _resolve_layer_arn
+                - Any other type returns None
+
+        Returns:
+            str | None: The logical ID if found, None otherwise
+
+        Examples:
+            >>> toolkit._get_ref_value({"Ref": "MyLayer"})
+            'MyLayer'
+
+            >>> toolkit._get_ref_value("!Ref:MyLayer")
+            'MyLayer'
+
+            >>> toolkit._get_ref_value("not-a-ref")
+            None
+        """
+        if isinstance(layer_ref, dict) and "Ref" in layer_ref:
+            return layer_ref["Ref"]
+        elif isinstance(layer_ref, str) and layer_ref.startswith("!Ref:"):
+            return layer_ref[5:]  # Remove "!Ref:" prefix
+        return None
+
+    def _copy_local_layer(self, source_dir: Path, target_dir: Path, layer_id: str, template: dict) -> None:
+        """Copy a local Lambda layer's contents to the target directory.
+
+        This method handles copying layers that are defined within the same CloudFormation
+        template (as opposed to external layers referenced by ARN). It follows AWS Lambda's
+        layer directory structure conventions for different runtimes.
+
+        The method looks for the layer in two locations:
+        1. A directory named after the layer's logical ID
+        2. The path specified in the layer's ContentUri property
+
+        For Python layers, the contents of the 'python/' directory are copied directly
+        to the target (following Lambda's behavior). For other runtimes, the runtime
+        directory structure is preserved.
+
+        Args:
+            source_dir: The base directory containing the SAM build output
+            target_dir: The target directory (usually the function's build directory)
+            layer_id: The logical ID of the layer in the CloudFormation template
+            template: The CloudFormation template containing the layer definition
+
+        Layer Structure Examples:
+            Python layer source:
+                LayerLogicalId/
+                    python/
+                        my_module.py
+                        my_package/
+                            __init__.py
+
+            Result in target:
+                my_module.py
+                my_package/
+                    __init__.py
+
+            Node.js layer source:
+                LayerLogicalId/
+                    nodejs/
+                        node_modules/
+                            express/
+
+            Result in target:
+                nodejs/
+                    node_modules/
+                        express/
+        """
+        import shutil
+
+        # Find the layer resource
+        if "Resources" not in template or layer_id not in template["Resources"]:
+            return
+
+        layer_resource = template["Resources"][layer_id]
+        if layer_resource.get("Type") not in ["AWS::Lambda::LayerVersion", "AWS::Serverless::LayerVersion"]:
+            return
+
+        properties = layer_resource.get("Properties", {})
+        content_uri = properties.get("ContentUri", "")
+
+        if not content_uri:
+            return
+
+        # Source layer directory
+        layer_source = source_dir / layer_id
+        if not layer_source.exists():
+            # Try the ContentUri directly
+            layer_source = source_dir / content_uri
+            if not layer_source.exists():
+                return
+
+        # Copy layer contents following Lambda layer structure
+        # Layers are extracted to /opt in Lambda, so we follow the same structure
+        for runtime_dir in ["python", "nodejs", "ruby", "java"]:
+            src_runtime = layer_source / runtime_dir
+            if src_runtime.exists():
+                dst_runtime = target_dir
+                # For Python, contents go directly to the function directory
+                if runtime_dir == "python":
+                    # Copy all contents from python/ to the function root
+                    for item in src_runtime.iterdir():
+                        if item.is_dir():
+                            shutil.copytree(item, dst_runtime / item.name, dirs_exist_ok=True)
+                        else:
+                            shutil.copy2(item, dst_runtime)
+                else:
+                    # For other runtimes, maintain the structure
+                    shutil.copytree(src_runtime, dst_runtime / runtime_dir, dirs_exist_ok=True)
+
+    def _download_and_cache_layer(self, layer_arn: str, cache_dir: Path) -> Path | None:
+        """Download a Lambda layer from AWS and cache it locally.
+
+        This method handles downloading external Lambda layers (those referenced by ARN)
+        from AWS. Downloaded layers are cached to avoid repeated downloads.
+
+        The cache uses an MD5 hash of the layer ARN as the filename to ensure
+        uniqueness while maintaining a flat cache structure.
+
+        Args:
+            layer_arn: The full ARN of the Lambda layer version to download.
+                Format: arn:aws:lambda:region:account:layer:layer-name:version
+            cache_dir: Directory where downloaded layers should be cached
+
+        Returns:
+            Path | None: Path to the cached layer zip file if successful, None if:
+                - The layer ARN is invalid
+                - The layer cannot be accessed (permissions, doesn't exist, etc.)
+                - Any error occurs during download
+
+        Cache Behavior:
+            - If a layer is already cached, it returns immediately without downloading
+            - Cache files are named as: {md5_hash_of_arn}.zip
+            - No cache expiration is implemented; layers are assumed immutable
+
+        Error Handling:
+            - Returns None for any errors rather than raising exceptions
+            - This allows layer processing to continue even if some layers fail
+
+        Example:
+            >>> arn = "arn:aws:lambda:us-east-1:123456789012:layer:my-layer:42"
+            >>> path = toolkit._download_and_cache_layer(arn, Path("/tmp/cache"))
+            >>> # Returns: Path("/tmp/cache/a1b2c3d4e5f6.zip") or None
+        """
+        import hashlib
+
+        import boto3
+        from botocore.exceptions import ClientError
+
+        # Create a safe filename from the ARN
+        arn_hash = hashlib.md5(layer_arn.encode()).hexdigest()
+        cached_layer_path = cache_dir / f"{arn_hash}.zip"
+
+        # Check if already cached
+        if cached_layer_path.exists():
+            return cached_layer_path
+
+        try:
+            # Parse the ARN to get layer name and version
+            # Format: arn:aws:lambda:region:account:layer:layer-name:version
+            arn_parts = layer_arn.split(":")
+            if len(arn_parts) < 8 or arn_parts[5] != "layer":
+                return None
+
+            region = arn_parts[3]
+            layer_name = arn_parts[6]
+            layer_version = int(arn_parts[7])
+
+            # Create Lambda client for the specific region
+            lambda_client = boto3.client("lambda", region_name=region)
+
+            # Get layer version info
+            response = lambda_client.get_layer_version(LayerName=layer_name, VersionNumber=layer_version)
+
+            # Download the layer
+            import urllib.request
+
+            content = response.get("Content", {})
+            download_url = content.get("Location")
+            if not download_url:
+                return None
+            urllib.request.urlretrieve(download_url, cached_layer_path)
+
+            return cached_layer_path
+
+        except (ClientError, ValueError, KeyError):
+            # Log error but don't fail - layer might not be accessible
+            return None
+
+    def _extract_layer_to_function(self, layer_path: Path, function_dir: Path) -> None:
+        """Extract layer zip contents to the function directory.
+
+        This method extracts a downloaded Lambda layer and merges its contents with
+        the function's code directory. It handles the standard Lambda layer directory
+        structures for different runtimes.
+
+        Lambda layers follow specific directory structures:
+        - Python: python/ or python/lib/pythonX.Y/site-packages/
+        - Node.js: nodejs/node_modules/
+        - Ruby: ruby/gems/X.Y.0/
+        - Java: java/lib/
+
+        For Python (the most common case), this method:
+        1. Extracts contents from python/ directly to the function root
+        2. Also checks for site-packages in versioned Python paths
+        3. Merges directories without deleting existing files
+
+        Args:
+            layer_path: Path to the layer zip file to extract
+            function_dir: Target directory where layer contents should be extracted
+
+        File Handling:
+            - Uses dirs_exist_ok=True to merge directories
+            - Existing files with the same name are overwritten
+            - Files with unique names are preserved
+            - Temporary extraction directory is always cleaned up
+
+        Example:
+            Layer zip structure:
+                python/
+                    requests/
+                    urllib3/
+                python/lib/python3.9/site-packages/
+                    boto3/
+
+            Result in function_dir:
+                requests/
+                urllib3/
+                boto3/
+                (existing function files preserved)
+        """
+        import shutil
+        import zipfile
+
+        if not layer_path.exists() or not zipfile.is_zipfile(layer_path):
+            return
+
+        with zipfile.ZipFile(layer_path, "r") as zip_ref:
+            # Lambda layers are extracted to /opt, but we need to merge with function
+            # Extract to a temporary directory first
+            temp_extract = function_dir / ".temp_layer"
+            temp_extract.mkdir(exist_ok=True)
+
+            try:
+                zip_ref.extractall(temp_extract)
+
+                # Copy contents based on runtime structure
+                # Python layers usually have python/ or python/lib/python*/site-packages/
+                python_dir = temp_extract / "python"
+                if python_dir.exists():
+                    # Copy all contents from python/ to function root
+                    for item in python_dir.iterdir():
+                        if item.is_dir():
+                            shutil.copytree(item, function_dir / item.name, dirs_exist_ok=True)
+                        else:
+                            shutil.copy2(item, function_dir)
+
+                # Also check for direct site-packages
+                for py_version in ["python3.8", "python3.9", "python3.10", "python3.11", "python3.12"]:
+                    site_packages = temp_extract / "python" / "lib" / py_version / "site-packages"
+                    if site_packages.exists():
+                        for item in site_packages.iterdir():
+                            if item.is_dir():
+                                shutil.copytree(item, function_dir / item.name, dirs_exist_ok=True)
+                            else:
+                                shutil.copy2(item, function_dir)
+
+            finally:
+                # Clean up temp directory
+                shutil.rmtree(temp_extract, ignore_errors=True)
+
+    def _copy_function_code(self, source_dir: Path, target_dir: Path, function_id: str, properties: dict) -> None:
+        """Copy function code from source to target directory.
+
+        This method copies the Lambda function's own code (not layer code) from the
+        SAM build output to the target directory. It handles both explicit CodeUri
+        paths and the default convention of using the function's logical ID as the
+        directory name.
+
+        The method looks for function code in two locations:
+        1. A directory named after the function's logical ID
+        2. The path specified in the function's CodeUri property
+
+        Args:
+            source_dir: The base directory containing the SAM build output
+            target_dir: The target directory where function code should be copied
+            function_id: The logical ID of the function in the CloudFormation template
+            properties: The Properties section of the function resource, which may
+                contain a CodeUri field
+
+        File Handling:
+            - All files and directories are copied recursively
+            - Uses dirs_exist_ok=True to merge with existing directories
+            - Files with the same name are overwritten (function code has precedence)
+
+        Example:
+            Given:
+                source_dir: /build
+                function_id: "MyFunction"
+                properties: {"CodeUri": "src/functions/my-func"}
+
+            Will check:
+                1. /build/MyFunction/
+                2. /build/src/functions/my-func/
+
+            And copy all contents to target_dir
+        """
+        import shutil
+
+        # Get CodeUri from properties
+        code_uri = properties.get("CodeUri", function_id)
+
+        # Source function directory
+        func_source = source_dir / function_id
+        if not func_source.exists() and code_uri:
+            # Try CodeUri
+            func_source = source_dir / code_uri
+
+        if func_source.exists() and func_source.is_dir():
+            # Copy all function contents
+            for item in func_source.iterdir():
+                if item.is_dir():
+                    shutil.copytree(item, target_dir / item.name, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(item, target_dir)
 
 
 class LocalStackCloudFormationTemplateProcessor(CloudFormationTemplateProcessor):
