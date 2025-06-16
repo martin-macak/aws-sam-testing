@@ -445,6 +445,7 @@ class AWSSAMToolkit(CloudFormationTool):
                             isolation_level=isolation_level,
                             port=port,
                             host=host,
+                            pytest_request_context=pytest_request_context,
                         )
                         context_resources.append(local_api)
             finally:
@@ -455,7 +456,6 @@ class AWSSAMToolkit(CloudFormationTool):
 
         # Run APIs in managed context.
         with ExitStack() as stack:
-            for resource in context_resources:
-                stack.enter_context(resource)
+            stack_resources = [stack.enter_context(context_resource) for context_resource in context_resources]
 
-            yield api_handlers
+            yield [context_resource for context_resource in stack_resources if isinstance(context_resource, LocalApi)]
