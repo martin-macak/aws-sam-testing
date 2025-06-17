@@ -30,6 +30,8 @@ test-in-docker:
 	docker build -t aws-sam-testing:test -f test_in_docker/Dockerfile test_in_docker/
 	docker run -v $(PWD):/app-src aws-sam-testing:test
 
+test-all: pyright test test-slow test-stacks test-examples
+
 pyright:
 	uv run pyright
 

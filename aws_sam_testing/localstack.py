@@ -1,3 +1,4 @@
+import functools
 from contextlib import contextmanager
 from enum import Enum
 from pathlib import Path
@@ -12,6 +13,14 @@ from aws_sam_testing.core import CloudFormationTool
 class LocalStackFeautureSet(Enum):
     NORMAL = "normal"
     PRO = "pro"
+
+
+class LocalStackApi:
+    def __init__(
+        self,
+        base_url: str,
+    ):
+        self.base_url = base_url
 
 
 class LocalStack:
@@ -89,7 +98,7 @@ class LocalStack:
 
         import boto3
 
-        from aws_sam_testing.aws_sam import set_environment
+        from aws_sam_testing.util import set_environment
 
         if self.host is None or self.port is None:
             raise RuntimeError("LocalStack is not running")
@@ -120,6 +129,39 @@ class LocalStack:
                 if attempt == max_attempts - 1:
                     raise RuntimeError("LocalStack S3 API did not become available after port was reachable.")
                 time.sleep(1)
+
+    @functools.cache
+    def get_apis(self) -> list[LocalStackApi]:
+        import boto3
+
+        from aws_sam_testing.util import set_environment
+
+        with set_environment(
+            AWS_ENDPOINT_URL=f"http://{self.host}:{self.port}",
+        ):
+            apigateway = boto3.client(
+                "apigateway",
+                region_name=self.region,
+            )
+
+            api_gateway_response = apigateway.get_rest_apis()
+            api_gateway_apis = api_gateway_response["items"]
+
+            apis: list[LocalStackApi] = []
+
+            for api_gateway_api in api_gateway_apis:
+                api_id = api_gateway_api["id"]  # type: ignore
+                api_gateway_stages_response = apigateway.get_stages(restApiId=api_id)  # type: ignore
+                api_gateway_stages = api_gateway_stages_response["item"]
+                for api_gateway_stage in api_gateway_stages:
+                    api_gateway_stage_name = api_gateway_stage["stageName"]  # type: ignore
+
+                    api = LocalStackApi(
+                        base_url=f"http://{self.host}:{self.port}/_aws/execute-api/{api_id}/{api_gateway_stage_name}",
+                    )
+                    apis.append(api)
+
+            return apis
 
 
 class LocalStackToolkit(CloudFormationTool):

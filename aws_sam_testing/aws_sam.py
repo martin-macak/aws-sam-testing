@@ -337,6 +337,8 @@ class AWSSAMToolkit(CloudFormationTool):
         from samcli.commands.deploy.deploy_context import DeployContext
         from samcli.commands.package.package_context import PackageContext
 
+        from aws_sam_testing.util import set_environment
+
         if build_dir is None:
             build_dir = Path(self.working_dir) / ".aws-sam" / "aws-sam-testing-build"
         elif isinstance(build_dir, str):
@@ -630,27 +632,3 @@ class AWSSAMToolkit(CloudFormationTool):
             stack_resources = [stack.enter_context(context_resource) for context_resource in context_resources]
 
             yield [context_resource for context_resource in stack_resources if isinstance(context_resource, LocalApi)]
-
-
-@contextmanager
-def set_environment(
-    **kwargs,
-):
-    import os
-
-    current_environment = os.environ.copy()
-    new_environment = {
-        **current_environment,
-        **kwargs,
-    }
-    old_environment = current_environment.copy()
-
-    try:
-        os.environ.update(new_environment)
-        yield
-    finally:
-        # iterate over current os.environ and remove keys that are not present in old_environment
-        for key in os.environ:
-            if key not in old_environment:
-                os.environ.pop(key)
-        os.environ.update(old_environment)
