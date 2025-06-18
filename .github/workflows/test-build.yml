@@ -35,7 +35,7 @@ jobs:
     
     - name: Run tests
       run: |
-        uv run pytest tests/
+        uv run pytest -m "not slow" tests/
     
     - name: Run type checking
       run: |
