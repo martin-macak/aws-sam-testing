@@ -366,7 +366,7 @@ class AWSSAMToolkit(CloudFormationTool):
         except Exception:
             s3api.create_bucket(
                 Bucket=s3_bucket,
-                # CreateBucketConfiguration={"LocationConstraint": region},  # type: ignore
+                CreateBucketConfiguration={"LocationConstraint": region},  # type: ignore
             )
 
         packaged_template_path = build_dir / "packaged.yaml"

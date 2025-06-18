@@ -17,9 +17,6 @@ class TestLocalstackSimpleApi:
         from aws_sam_testing.aws_sam import AWSSAMToolkit
         from aws_sam_testing.localstack import LocalStackFeautureSet, LocalStackToolkit
 
-        monkeypatch.setenv("AWS_REGION", "us-east-1")
-        monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
-
         working_dir = Path(__file__).parent
 
         aws_sam_build_path = working_dir / ".aws-sam"
