@@ -18,8 +18,12 @@ class LocalStackFeautureSet(Enum):
 class LocalStackApi:
     def __init__(
         self,
+        api_id: str,
+        api_gateway_stage_name: str,
         base_url: str,
     ):
+        self.api_id = api_id
+        self.api_gateway_stage_name = api_gateway_stage_name
         self.base_url = base_url
 
 
@@ -161,6 +165,8 @@ class LocalStack:
                     api_gateway_stage_name = api_gateway_stage["stageName"]  # type: ignore
 
                     api = LocalStackApi(
+                        api_id=api_id,
+                        api_gateway_stage_name=api_gateway_stage_name,
                         base_url=f"http://{self.host}:{self.port}/_aws/execute-api/{api_id}/{api_gateway_stage_name}",
                     )
                     apis.append(api)

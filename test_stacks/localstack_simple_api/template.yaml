@@ -56,3 +56,8 @@ Resources:
           Properties:
             Path: /users
             Method: GET
+        CreateUser:
+          Type: Api
+          Properties:
+            Path: /users
+            Method: POST
