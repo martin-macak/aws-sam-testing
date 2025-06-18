@@ -72,4 +72,6 @@ dev = [
     "moto>=5.1.5",
     "openapi-spec-validator>=0.7.1",
     "pre-commit>=4.2.0",
+    "types-pyyaml>=6.0.12.20250516",
+    "types-boto3>=1.38.38",
 ]
