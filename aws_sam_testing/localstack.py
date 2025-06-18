@@ -82,6 +82,10 @@ class LocalStack:
             ports={"4566/tcp": port},
             detach=True,
             privileged=True,
+            environment={
+                "AWS_REGION": self.region,
+                "AWS_DEFAULT_REGION": self.region,
+            },
             volumes={"/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"}},
         )
         self.container = container

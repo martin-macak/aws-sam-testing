@@ -396,7 +396,7 @@ class AWSSAMToolkit(CloudFormationTool):
                 on_deploy=False,
                 region=region,
                 metadata=metadata,
-                profile="default",
+                profile=None,
                 image_repository=image_repository,
                 image_repositories=image_repositories,
             ) as package_context:
