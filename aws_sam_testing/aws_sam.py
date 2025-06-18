@@ -272,7 +272,7 @@ class AWSSAMToolkit(CloudFormationTool):
         s3_prefix: str = "sam/",
         image_repository: str | None = None,
         image_repositories: dict[str, str] | None = None,
-        capabilities: list[str] = ["CAPABILITY_IAM", "CAPABILITY_NAMED_IAM"],
+        capabilities: list[str] = ["CAPABILITY_IAM", "CAPABILITY_NAMED_IAM", "CAPABILITY_AUTO_EXPAND"],
         parameter_overrides: dict[str, str] = {},
         role_arn: str = "arn:aws:iam::000000000000:role/test-role",
         notification_arns: list[str] = [],
@@ -294,7 +294,6 @@ class AWSSAMToolkit(CloudFormationTool):
         poll_delay: float = 1.0,
         max_wait_duration: int = 60,
         boto3_session: Any | None = None,
-        aws_endpoint_url: str | None = None,
     ) -> None:
         """
         Deploy the SAM stack using direct API calls.
@@ -331,13 +330,10 @@ class AWSSAMToolkit(CloudFormationTool):
             boto3_session: Optional boto3 Session to use for AWS API calls
         """
         import os
-        from contextlib import ExitStack
 
         import boto3
         from samcli.commands.deploy.deploy_context import DeployContext
         from samcli.commands.package.package_context import PackageContext
-
-        from aws_sam_testing.util import set_environment
 
         if build_dir is None:
             build_dir = Path(self.working_dir) / ".aws-sam" / "aws-sam-testing-build"
@@ -358,49 +354,40 @@ class AWSSAMToolkit(CloudFormationTool):
         if region is None:
             region = os.environ.get("AWS_REGION", "us-east-1")
 
-        with ExitStack() as env_context:
-            if aws_endpoint_url is not None:
-                env = set_environment(
-                    AWS_ENDPOINT_URL=aws_endpoint_url,
-                )
-                env_context.enter_context(env)
-            else:
-                pass
+        if boto3_session:
+            s3api = boto3_session.client("s3", region_name=region)
+        else:
+            s3api = boto3.client("s3", region_name=region)
+        assert s3api is not None
 
-            if boto3_session:
-                s3api = boto3_session.client("s3", region_name=region)
-            else:
-                s3api = boto3.client("s3", region_name=region)
-            assert s3api is not None
+        # Check that bucket exists
+        try:
+            s3api.head_bucket(Bucket=s3_bucket)
+        except Exception:
+            s3api.create_bucket(
+                Bucket=s3_bucket,
+                # CreateBucketConfiguration={"LocationConstraint": region},  # type: ignore
+            )
 
-            # Check that bucket exists
-            try:
-                s3api.head_bucket(Bucket=s3_bucket)
-            except Exception:
-                s3api.create_bucket(
-                    Bucket=s3_bucket,
-                    # CreateBucketConfiguration={"LocationConstraint": region},  # type: ignore
-                )
+        packaged_template_path = build_dir / "packaged.yaml"
 
-            packaged_template_path = build_dir / "packaged.yaml"
-
-            with PackageContext(
-                template_file=str(template_path),
-                s3_bucket=s3_bucket,
-                s3_prefix=s3_prefix,
-                output_template_file=str(packaged_template_path),
-                kms_key_id=kms_key_id,
-                use_json=use_json,
-                force_upload=force_upload,
-                no_progressbar=no_progressbar,
-                on_deploy=False,
-                region=region,
-                metadata=metadata,
-                profile=None,
-                image_repository=image_repository,
-                image_repositories=image_repositories,
-            ) as package_context:
-                package_context.run()
+        with PackageContext(
+            template_file=str(template_path),
+            s3_bucket=s3_bucket,
+            s3_prefix=s3_prefix,
+            output_template_file=str(packaged_template_path),
+            kms_key_id=kms_key_id,
+            use_json=use_json,
+            force_upload=force_upload,
+            no_progressbar=no_progressbar,
+            on_deploy=False,
+            region=region,
+            metadata=metadata,
+            profile=None,
+            image_repository=image_repository,
+            image_repositories=image_repositories,
+        ) as package_context:
+            package_context.run()
 
         with DeployContext(
             template_file=str(packaged_template_path),

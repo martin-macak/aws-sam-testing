@@ -258,6 +258,7 @@ class LocalStackToolkit(CloudFormationTool):
         import os
 
         from aws_sam_testing.aws_sam import AWSSAMToolkit
+        from aws_sam_testing.util import set_environment
 
         if template_path is None:
             template_path = self.template_path
@@ -277,15 +278,18 @@ class LocalStackToolkit(CloudFormationTool):
             localstack.start()
             localstack.wait_for_localstack_to_be_ready()
 
-            sam_toolkit = AWSSAMToolkit(
-                working_dir=build_dir,
-                template_path=template_path,
-            )
-            sam_toolkit.sam_deploy(
-                build_dir=build_dir,
-                template_path=template_path,
-                aws_endpoint_url=f"http://{localstack.host}:{localstack.port}",
-            )
+            with set_environment(
+                AWS_ENDPOINT_URL=f"http://{localstack.host}:{localstack.port}",
+            ):
+                sam_toolkit = AWSSAMToolkit(
+                    working_dir=build_dir,
+                    template_path=template_path,
+                )
+                sam_toolkit.sam_deploy(
+                    build_dir=build_dir,
+                    template_path=template_path,
+                    region=localstack.region,
+                )
 
             yield localstack
 
