@@ -362,8 +362,6 @@ class AWSSAMToolkit(CloudFormationTool):
             if aws_endpoint_url is not None:
                 env = set_environment(
                     AWS_ENDPOINT_URL=aws_endpoint_url,
-                    AWS_REGION=region,
-                    AWS_DEFAULT_REGION=region,
                 )
                 env_context.enter_context(env)
             else:
@@ -381,7 +379,7 @@ class AWSSAMToolkit(CloudFormationTool):
             except Exception:
                 s3api.create_bucket(
                     Bucket=s3_bucket,
-                    CreateBucketConfiguration={"LocationConstraint": region},  # type: ignore
+                    # CreateBucketConfiguration={"LocationConstraint": region},  # type: ignore
                 )
 
             packaged_template_path = build_dir / "packaged.yaml"
