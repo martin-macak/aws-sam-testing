@@ -1,0 +1,65 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Simple REST API with Lambda and DynamoDB
+
+Globals:
+  Function:
+    Timeout: 30
+    Runtime: python3.13
+    MemorySize: 128
+
+Resources:
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: UsersTable
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  ServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: Admin
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - "*"
+                Resource: "*"
+
+  ApiHandler:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: handler
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          USERS_TABLE_NAME: !Ref UsersTable
+      Role: !GetAtt ServiceRole.Arn
+      Layers:
+        - !Sub arn:aws:lambda:${AWS::Region}:017000801446:layer:AWSLambdaPowertoolsPythonV3-python313-arm64:7
+      Events:
+        GetUsers:
+          Type: Api
+          Properties:
+            Path: /users
+            Method: GET
+        CreateUser:
+          Type: Api
+          Properties:
+            Path: /users
+            Method: POST

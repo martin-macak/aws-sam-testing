@@ -1,4 +1,5 @@
 import functools
+import logging
 from contextlib import contextmanager
 from enum import Enum
 from pathlib import Path
@@ -8,6 +9,8 @@ import pytest
 
 from aws_sam_testing.cfn import CloudFormationTemplateProcessor
 from aws_sam_testing.core import CloudFormationTool
+
+logger = logging.getLogger(__name__)
 
 
 class LocalStackFeautureSet(Enum):
@@ -186,6 +189,7 @@ class LocalStackToolkit(CloudFormationTool):
         self,
         feature_set: LocalStackFeautureSet = LocalStackFeautureSet.NORMAL,
         build_dir: Path | None = None,
+        region: str | None = None,
     ) -> Path:
         """
         Creates a new AWS SAM build that can be executed in localstack.
@@ -214,7 +218,12 @@ class LocalStackToolkit(CloudFormationTool):
         Returns:
             Path: The path to the processed build directory.
         """
+        import os
+
         from aws_sam_testing.cfn import dump_yaml
+
+        if region is None:
+            region = os.environ.get("AWS_REGION", "us-east-1")
 
         # localstack_base_build_dir is the directory where the base build is stored
         # localstack_processed_build_dir is the directory where the processed build is stored
@@ -245,6 +254,7 @@ class LocalStackToolkit(CloudFormationTool):
                     build_dir=localstack_processed_build_dir,
                     flatten_layers=True,
                     layer_cache_dir=build_dir / "tmp" / "aws-sam-testing-localstack-layers",
+                    region=region,
                 )
             finally:
                 processed_template_path.unlink()
@@ -305,6 +315,7 @@ class LocalStackToolkit(CloudFormationTool):
         build_dir: Path,
         flatten_layers: bool = True,
         layer_cache_dir: Path | None = None,
+        region: str | None = None,
     ) -> Path:
         """
         Processes the AWS SAM build directory so it can be executed safely in localstack.
@@ -426,7 +437,7 @@ class LocalStackToolkit(CloudFormationTool):
 
             # Process layers in order (they are applied in order)
             for layer_ref in layers:
-                layer_arn = self._resolve_layer_arn(layer_ref, template)
+                layer_arn = self._resolve_layer_arn(layer_ref, template, region)
                 if not layer_arn:
                     continue
 
@@ -475,7 +486,52 @@ class LocalStackToolkit(CloudFormationTool):
 
         return build_dir
 
-    def _resolve_layer_arn(self, layer_ref: Any, template: dict) -> str | None:
+    def _substitute_cloudformation_variables(self, template_string: str, region: str | None = None) -> str:
+        """Substitute CloudFormation variables in a string.
+
+        This method substitutes CloudFormation variables (${variableName}) in a string
+        with their actual values. Currently only supports AWS::Region variable.
+
+        Args:
+            template_string: The string containing variables to substitute
+            region: The AWS region to use for substitution. If None, uses 'us-east-1' as default.
+
+        Returns:
+            str: The string with variables substituted
+
+        Raises:
+            ValueError: If the string contains unsupported variables
+
+        Supported variables:
+            - ${AWS::Region}: Replaced with the provided region
+
+        Examples:
+            >>> toolkit._substitute_cloudformation_variables("arn:aws:lambda:${AWS::Region}:123:layer:my-layer:1", "eu-west-1")
+            'arn:aws:lambda:eu-west-1:123:layer:my-layer:1'
+        """
+        import re
+
+        # Find all variables in the string
+        variable_pattern = re.compile(r"\$\{([^}]+)\}")
+        variables = variable_pattern.findall(template_string)
+
+        # Check for unsupported variables
+        supported_variables = {"AWS::Region"}
+        unsupported = set(variables) - supported_variables
+        if unsupported:
+            raise ValueError(f"Unsupported CloudFormation variables: {', '.join(sorted(unsupported))}")
+
+        # Substitute variables
+        result = template_string
+        if "AWS::Region" in variables:
+            # Use provided region or default
+            if region is None:
+                region = "us-east-1"
+            result = result.replace("${AWS::Region}", region)
+
+        return result
+
+    def _resolve_layer_arn(self, layer_ref: Any, template: dict, region: str | None = None) -> str | None:
         """Resolve a layer reference to its ARN or a special reference identifier.
 
         This method handles different types of layer references that can appear in
@@ -484,18 +540,21 @@ class LocalStackToolkit(CloudFormationTool):
         1. Direct ARN strings: "arn:aws:lambda:region:account:layer:name:version"
         2. CloudFormation Ref: {"Ref": "LayerLogicalId"}
         3. CloudFormation GetAtt: {"Fn::GetAtt": ["LayerLogicalId", "Arn"]}
+        4. CloudFormation Sub: {"Fn::Sub": "arn:aws:lambda:${AWS::Region}:..."}
 
         Args:
             layer_ref: The layer reference from the template. Can be:
                 - str: Direct ARN string
-                - dict: CloudFormation intrinsic function (Ref, GetAtt, etc.)
+                - dict: CloudFormation intrinsic function (Ref, GetAtt, Sub, etc.)
             template: The CloudFormation template dict (currently unused but kept for
                 future extensions)
+            region: The AWS region to use for variable substitution in Fn::Sub
 
         Returns:
             str | None:
                 - For direct ARNs: returns the ARN string as-is
                 - For Ref: returns "!Ref:LogicalId" to indicate a local reference
+                - For Sub: returns the substituted string
                 - For GetAtt: returns None (not currently supported)
                 - For other types: returns None
 
@@ -505,6 +564,9 @@ class LocalStackToolkit(CloudFormationTool):
 
             >>> toolkit._resolve_layer_arn({"Ref": "MyLayer"}, {})
             '!Ref:MyLayer'
+
+            >>> toolkit._resolve_layer_arn({"Fn::Sub": "arn:aws:lambda:${AWS::Region}:123:layer:my-layer:1"}, {}, "eu-west-1")
+            'arn:aws:lambda:eu-west-1:123:layer:my-layer:1'
         """
         if isinstance(layer_ref, str):
             return layer_ref
@@ -512,6 +574,19 @@ class LocalStackToolkit(CloudFormationTool):
             if "Ref" in layer_ref:
                 # Local layer reference
                 return f"!Ref:{layer_ref['Ref']}"
+            elif "Fn::Sub" in layer_ref:
+                # Handle Fn::Sub
+                sub_value = layer_ref["Fn::Sub"]
+                if isinstance(sub_value, str):
+                    # Simple string substitution
+                    return self._substitute_cloudformation_variables(sub_value, region)
+                elif isinstance(sub_value, list) and len(sub_value) == 2:
+                    # Format: [template_string, {var: value}]
+                    # For now, we don't support custom variables in the second parameter
+                    template_string = sub_value[0]
+                    return self._substitute_cloudformation_variables(template_string, region)
+                else:
+                    return None
             elif "Fn::GetAtt" in layer_ref:
                 # GetAtt reference
                 return None  # Not supported for now
@@ -694,14 +769,12 @@ class LocalStackToolkit(CloudFormationTool):
                 return None
 
             region = arn_parts[3]
-            layer_name = arn_parts[6]
-            layer_version = int(arn_parts[7])
 
             # Create Lambda client for the specific region
             lambda_client = boto3.client("lambda", region_name=region)
 
             # Get layer version info
-            response = lambda_client.get_layer_version(LayerName=layer_name, VersionNumber=layer_version)
+            response = lambda_client.get_layer_version_by_arn(Arn=layer_arn)
 
             # Download the layer
             import urllib.request
@@ -714,9 +787,9 @@ class LocalStackToolkit(CloudFormationTool):
 
             return cached_layer_path
 
-        except (ClientError, ValueError, KeyError):
-            # Log error but don't fail - layer might not be accessible
-            return None
+        except (ClientError, ValueError, KeyError) as e:
+            logger.error(f"Error downloading layer {layer_arn}: {e}")
+            raise
 
     def _extract_layer_to_function(self, layer_path: Path, function_dir: Path) -> None:
         """Extract layer zip contents to the function directory.

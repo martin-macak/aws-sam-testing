@@ -74,4 +74,6 @@ dev = [
     "pre-commit>=4.2.0",
     "types-pyyaml>=6.0.12.20250516",
     "types-boto3>=1.38.38",
+    "aws-lambda-powertools>=3.14.0",
+    "aws-xray-sdk>=2.14.0",
 ]

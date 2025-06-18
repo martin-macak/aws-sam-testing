@@ -624,20 +624,68 @@ def lambda_handler(event, context):
         def test_resolve_layer_arn_with_string(self, toolkit):
             """Test resolving layer ARN from string."""
             arn = "arn:aws:lambda:us-east-1:123456789012:layer:my-layer:1"
-            result = toolkit._resolve_layer_arn(arn, {})
+            result = toolkit._resolve_layer_arn(arn, {}, region="us-east-1")
             assert result == arn
 
         def test_resolve_layer_arn_with_ref(self, toolkit):
             """Test resolving layer ARN from Ref."""
             layer_ref = {"Ref": "MyLayer"}
-            result = toolkit._resolve_layer_arn(layer_ref, {})
+            result = toolkit._resolve_layer_arn(layer_ref, {}, region="us-east-1")
             assert result == "!Ref:MyLayer"
 
         def test_resolve_layer_arn_with_getatt(self, toolkit):
             """Test resolving layer ARN from GetAtt returns None."""
             layer_ref = {"Fn::GetAtt": ["MyLayer", "Arn"]}
-            result = toolkit._resolve_layer_arn(layer_ref, {})
+            result = toolkit._resolve_layer_arn(layer_ref, {}, region="us-east-1")
             assert result is None
+
+        def test_resolve_layer_arn_with_fn_sub_string(self, toolkit):
+            """Test resolving layer ARN from Fn::Sub with string format."""
+            layer_ref = {"Fn::Sub": "arn:aws:lambda:${AWS::Region}:123456789012:layer:my-layer:1"}
+            result = toolkit._resolve_layer_arn(layer_ref, {}, region="eu-west-1")
+            assert result == "arn:aws:lambda:eu-west-1:123456789012:layer:my-layer:1"
+
+        def test_resolve_layer_arn_with_fn_sub_list_format(self, toolkit):
+            """Test resolving layer ARN from Fn::Sub with list format."""
+            layer_ref = {"Fn::Sub": ["arn:aws:lambda:${AWS::Region}:123456789012:layer:my-layer:1", {}]}
+            result = toolkit._resolve_layer_arn(layer_ref, {}, region="ap-southeast-2")
+            assert result == "arn:aws:lambda:ap-southeast-2:123456789012:layer:my-layer:1"
+
+        def test_resolve_layer_arn_with_fn_sub_default_region(self, toolkit):
+            """Test resolving layer ARN from Fn::Sub with default region when none provided."""
+            layer_ref = {"Fn::Sub": "arn:aws:lambda:${AWS::Region}:123456789012:layer:my-layer:1"}
+            result = toolkit._resolve_layer_arn(layer_ref, {}, region=None)
+            assert result == "arn:aws:lambda:us-east-1:123456789012:layer:my-layer:1"
+
+        def test_resolve_layer_arn_with_fn_sub_invalid_format(self, toolkit):
+            """Test resolving layer ARN from Fn::Sub with invalid format returns None."""
+            layer_ref = {"Fn::Sub": {"invalid": "format"}}
+            result = toolkit._resolve_layer_arn(layer_ref, {}, region="us-east-1")
+            assert result is None
+
+        def test_substitute_cloudformation_variables_with_region(self, toolkit):
+            """Test substituting CloudFormation variables with region."""
+            template_string = "arn:aws:lambda:${AWS::Region}:123456789012:layer:my-layer:1"
+            result = toolkit._substitute_cloudformation_variables(template_string, region="eu-central-1")
+            assert result == "arn:aws:lambda:eu-central-1:123456789012:layer:my-layer:1"
+
+        def test_substitute_cloudformation_variables_unsupported_variable(self, toolkit):
+            """Test substituting CloudFormation variables raises error for unsupported variables."""
+            template_string = "arn:aws:lambda:${AWS::AccountId}:layer:my-layer:1"
+            with pytest.raises(ValueError, match="Unsupported CloudFormation variables: AWS::AccountId"):
+                toolkit._substitute_cloudformation_variables(template_string, region="us-east-1")
+
+        def test_substitute_cloudformation_variables_multiple_variables(self, toolkit):
+            """Test substituting CloudFormation variables with multiple variables."""
+            template_string = "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:${LayerName}:1"
+            with pytest.raises(ValueError, match="Unsupported CloudFormation variables: AWS::AccountId, LayerName"):
+                toolkit._substitute_cloudformation_variables(template_string, region="us-east-1")
+
+        def test_substitute_cloudformation_variables_no_variables(self, toolkit):
+            """Test substituting CloudFormation variables with no variables."""
+            template_string = "arn:aws:lambda:us-east-1:123456789012:layer:my-layer:1"
+            result = toolkit._substitute_cloudformation_variables(template_string, region="eu-west-1")
+            assert result == template_string  # Should return unchanged
 
         def test_get_ref_value(self, toolkit):
             """Test extracting reference value."""
@@ -890,6 +938,46 @@ def lambda_handler(event, context):
             assert "Layers" not in output_template["Resources"]["MyFunction"]["Properties"]
             assert "Layer1" not in output_template["Resources"]
             assert "Layer2" not in output_template["Resources"]
+
+        def test_full_integration_with_fn_sub_layer(self, toolkit, tmp_path):
+            """Integration test with function using Fn::Sub in layer ARN."""
+            template = {
+                "AWSTemplateFormatVersion": "2010-09-09",
+                "Resources": {
+                    "MyFunction": {
+                        "Type": "AWS::Lambda::Function",
+                        "Properties": {
+                            "Code": {"ZipFile": "print('hello')"},
+                            "Handler": "index.handler",
+                            "Runtime": "python3.9",
+                            "Layers": [{"Fn::Sub": "arn:aws:lambda:${AWS::Region}:123456789012:layer:external-layer:1"}],
+                        },
+                    },
+                },
+            }
+
+            source_path = tmp_path / "source" / "template.yaml"
+            source_path.parent.mkdir(parents=True)
+
+            # Create function
+            func_dir = source_path.parent / "MyFunction"
+            func_dir.mkdir()
+            (func_dir / "handler.py").write_text("def handler(event, context): pass")
+
+            import yaml
+
+            source_path.write_text(yaml.dump(template))
+
+            build_dir = tmp_path / "build"
+
+            # Mock the download since we're testing the Fn::Sub resolution
+            with patch.object(toolkit, "_download_and_cache_layer", return_value=None) as mock_download:
+                toolkit._process_lambda_layers(source_template_path=source_path, build_dir=build_dir, flatten_layers=True, region="eu-west-1")
+
+                # Verify the layer ARN was resolved with the correct region
+                mock_download.assert_called_once()
+                resolved_arn = mock_download.call_args[0][0]
+                assert resolved_arn == "arn:aws:lambda:eu-west-1:123456789012:layer:external-layer:1"
 
         def test_layer_flattening_preserves_existing_files_in_directories(self, toolkit, tmp_path):
             """Test that layer flattening preserves existing files when merging directories.
