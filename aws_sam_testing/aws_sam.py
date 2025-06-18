@@ -362,15 +362,17 @@ class AWSSAMToolkit(CloudFormationTool):
             if aws_endpoint_url is not None:
                 env = set_environment(
                     AWS_ENDPOINT_URL=aws_endpoint_url,
+                    AWS_REGION=region,
+                    AWS_DEFAULT_REGION=region,
                 )
                 env_context.enter_context(env)
             else:
                 pass
 
             if boto3_session:
-                s3api = boto3_session.client("s3")
+                s3api = boto3_session.client("s3", region_name=region)
             else:
-                s3api = boto3.client("s3")
+                s3api = boto3.client("s3", region_name=region)
             assert s3api is not None
 
             # Check that bucket exists

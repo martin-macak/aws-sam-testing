@@ -79,7 +79,7 @@ class LocalStack:
         docker_client = DockerClient.from_env()
         container = docker_client.containers.run(
             "localstack/localstack:latest",
-            ports={"4566/tcp": 4566},
+            ports={"4566/tcp": port},
             detach=True,
             privileged=True,
             volumes={"/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"}},
@@ -165,13 +165,20 @@ class LocalStack:
 
 
 class LocalStackToolkit(CloudFormationTool):
+    """
+    This CloudFormationTool should be established in the directory that contains the AWS SAM build.
+
+    Args:
+        CloudFormationTool (_type_): _description_
+    """
+
     def build(
         self,
         feature_set: LocalStackFeautureSet = LocalStackFeautureSet.NORMAL,
         build_dir: Path | None = None,
     ) -> Path:
         """
-        Builds a new AWS SAM build that can be executed in localstack.
+        Creates a new AWS SAM build that can be executed in localstack.
 
         If feature_set is LocalStackFeautureSet.NORMAL, the build will be executed in localstack without PRO features.
         If feature_set is LocalStackFeautureSet.PRO, the build will be executed in localstack with PRO features.
@@ -197,81 +204,42 @@ class LocalStackToolkit(CloudFormationTool):
         Returns:
             Path: The path to the processed build directory.
         """
-        import shutil
-
-        from aws_sam_testing.aws_sam import AWSSAMToolkit
         from aws_sam_testing.cfn import dump_yaml
 
         # localstack_base_build_dir is the directory where the base build is stored
         # localstack_processed_build_dir is the directory where the processed build is stored
         # processed_build is valid AWS SAM build with certain changes that match the supported localstack features
-        localstack_base_build_dir = None
-        localstack_processed_build_dir = None
+
         if build_dir is None:
-            localstack_base_build_dir = Path(self.working_dir) / ".aws-sam" / "aws-sam-testing-localstack-base-build"
+            build_dir = Path(self.working_dir) / ".aws-sam"
             localstack_processed_build_dir = Path(self.working_dir) / ".aws-sam" / "aws-sam-testing-localstack-processed-build"
         else:
-            localstack_base_build_dir = build_dir / "aws-sam-testing-localstack-base-build"
             localstack_processed_build_dir = build_dir / "aws-sam-testing-localstack-processed-build"
 
-        assert localstack_base_build_dir is not None
         assert localstack_processed_build_dir is not None
 
-        processor = LocalStackCloudFormationTemplateProcessor(
-            template=self.template,
-        )
-
+        processed_template_path = self.template_path.parent / "template.localstack.yaml"
         if feature_set == LocalStackFeautureSet.NORMAL:
+            processor = LocalStackCloudFormationTemplateProcessor(
+                template=self.template,
+            )
             processor.remove_pro_resources()
+            processed_template = processor.processed_template
+            dump_yaml(processed_template, stream=processed_template_path.open("w"))
 
-        template = processor.processed_template
-
-        # this is for the build
-        # we need to put the template next to the source template so all relative paths in the template are correct
-        # this solution does not require rebasing
-        # we need to remove the file after the build is done
-        localstack_source_template_path = localstack_base_build_dir.parent / "template.localstack.yaml"
-        try:
-            # store the template in the build directory next to the source template
-            # relative paths in the template will be correct
-            localstack_source_template_path.parent.mkdir(parents=True, exist_ok=True)
-            dump_yaml(template, stream=localstack_source_template_path.open("w"))
-            # for debugging purposes, save the source template
-            localstack_base_build_dir.mkdir(parents=True, exist_ok=True)
-            dump_yaml(
-                template,
-                stream=(localstack_base_build_dir / "template.source.yaml").open("w"),
-            )
-
-            # run the AWS SAM build
-            # this creates the base build
-            sam_toolkit = AWSSAMToolkit(
-                working_dir=self.working_dir,
-                template_path=localstack_source_template_path,
-            )
-            sam_toolkit.sam_build(
-                build_dir=localstack_base_build_dir,
-            )
-        finally:
-            # delete the file
-            localstack_source_template_path.unlink()
-
-        if feature_set == LocalStackFeautureSet.NORMAL:
-            # process the lambda layers
-            # this creates new AWS SAM build with flattened layers
-            self._process_lambda_layers(
-                source_template_path=localstack_base_build_dir / "template.yaml",
-                build_dir=localstack_processed_build_dir,
-                flatten_layers=True,
-                layer_cache_dir=localstack_base_build_dir / "tmp" / "aws-sam-testing-localstack-layers",
-            )
+            try:
+                # process the lambda layers
+                # this creates new AWS SAM build with flattened layers
+                self._process_lambda_layers(
+                    source_template_path=processed_template_path,
+                    build_dir=localstack_processed_build_dir,
+                    flatten_layers=True,
+                    layer_cache_dir=build_dir / "tmp" / "aws-sam-testing-localstack-layers",
+                )
+            finally:
+                processed_template_path.unlink()
         else:
-            # copy the source build into the localstack build
-            shutil.copytree(
-                localstack_base_build_dir,
-                localstack_processed_build_dir,
-                dirs_exist_ok=True,
-            )
+            raise NotImplementedError("PRO features are not supported yet")
 
         return localstack_processed_build_dir
 
@@ -430,7 +398,12 @@ class LocalStackToolkit(CloudFormationTool):
             layers = properties.get("Layers", [])
             if not layers:
                 # No layers to process, just copy the function code
-                self._copy_function_code(source_template_path.parent, build_dir, logical_id, properties)
+                self._copy_function_code(
+                    source_template_path.parent,
+                    build_dir,
+                    logical_id,
+                    properties,
+                )
                 continue
 
             # Create function directory in build
@@ -466,7 +439,12 @@ class LocalStackToolkit(CloudFormationTool):
                         self._extract_layer_to_function(processed_layers[layer_arn], function_build_dir)
 
             # Copy the function's own code on top of layers
-            self._copy_function_code(source_template_path.parent, function_build_dir, logical_id, properties)
+            self._copy_function_code(
+                source_template_path.parent,
+                function_build_dir,
+                logical_id,
+                properties,
+            )
 
             # Remove Layers property from the function
             if "Layers" in processor.processed_template["Resources"][logical_id]["Properties"]:
@@ -814,7 +792,13 @@ class LocalStackToolkit(CloudFormationTool):
                 # Clean up temp directory
                 shutil.rmtree(temp_extract, ignore_errors=True)
 
-    def _copy_function_code(self, source_dir: Path, target_dir: Path, function_id: str, properties: dict) -> None:
+    def _copy_function_code(
+        self,
+        source_dir: Path,
+        target_dir: Path,
+        function_id: str,
+        properties: dict,
+    ) -> None:
         """Copy function code from source to target directory.
 
         This method copies the Lambda function's own code (not layer code) from the
@@ -862,12 +846,24 @@ class LocalStackToolkit(CloudFormationTool):
             func_source = source_dir / code_uri
 
         if func_source.exists() and func_source.is_dir():
-            # Copy all function contents
-            for item in func_source.iterdir():
-                if item.is_dir():
-                    shutil.copytree(item, target_dir / item.name, dirs_exist_ok=True)
-                else:
-                    shutil.copy2(item, target_dir)
+            # Check if target_dir already includes the function_id in its path
+            # This happens when processing functions with layers
+            if target_dir.name == function_id:
+                # Target dir is already the function directory, copy directly
+                for item in func_source.iterdir():
+                    if item.is_dir():
+                        shutil.copytree(item, target_dir / item.name, dirs_exist_ok=True)
+                    else:
+                        shutil.copy2(item, target_dir / item.name)
+            else:
+                # Target dir is the build dir, need to create function subdirectory
+                func_target = target_dir / function_id
+                func_target.mkdir(parents=True, exist_ok=True)
+                for item in func_source.iterdir():
+                    if item.is_dir():
+                        shutil.copytree(item, func_target / item.name, dirs_exist_ok=True)
+                    else:
+                        shutil.copy2(item, func_target / item.name)
 
 
 class LocalStackCloudFormationTemplateProcessor(CloudFormationTemplateProcessor):
