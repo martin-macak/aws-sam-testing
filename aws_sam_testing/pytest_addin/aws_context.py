@@ -5,6 +5,7 @@ import boto3
 import pytest
 
 from aws_sam_testing.aws_sam import IsolationLevel
+from aws_sam_testing.localstack import LocalStackFeautureSet
 
 
 class AWSTestContext:
@@ -12,35 +13,61 @@ class AWSTestContext:
         self,
         pytest_request_context: pytest.FixtureRequest,
     ):
-        self.pytest_request_context: pytest.FixtureRequest = pytest_request_context
-        self.project_root: Path | None = None
-        self.template_name: str = "template.yaml"
-        self.isolation_level: IsolationLevel = IsolationLevel.NONE
-
-    def set_project_root(self, path: Path) -> None:
-        self.project_root = path
-
-    def set_template_name(self, template_name: str) -> None:
-        self.template_name = template_name
+        self._pytest_request_context: pytest.FixtureRequest = pytest_request_context
+        self._project_root: Path | None = None
+        self._template_name: str = "template.yaml"
+        self._isolation_level: IsolationLevel = IsolationLevel.NONE
+        self._build_dir: Path | None = None
+        self._localstack_runs_build: bool = False
+        self._localstack_feature_set: LocalStackFeautureSet = LocalStackFeautureSet.NORMAL
 
     def get_project_root(self) -> Path:
         from aws_sam_testing.util import find_project_root
 
-        if self.project_root is None:
-            self.project_root = find_project_root(
-                start_path=Path(self.pytest_request_context.node.fspath.dirname),
-                template_name=self.template_name,
+        if self._project_root is None:
+            self._project_root = find_project_root(
+                start_path=Path(self._pytest_request_context.node.fspath.dirname),
+                template_name=self._template_name,
             )
-        return self.project_root
+        return self._project_root
+
+    def set_project_root(self, path: Path) -> None:
+        self._project_root = path
+
+    def get_template_name(self) -> str:
+        return self._template_name
+
+    def set_template_name(self, template_name: str) -> None:
+        self._template_name = template_name
+
+    def get_build_dir(self) -> Path:
+        if self._build_dir is None:
+            self._build_dir = self.get_project_root() / ".aws-sam" / "build"
+        return self._build_dir
+
+    def set_build_dir(self, build_dir: Path) -> None:
+        self._build_dir = build_dir
 
     def get_template_path(self) -> Path:
-        return self.get_project_root() / self.template_name
-
-    def set_api_isolation_level(self, isolation_level: IsolationLevel) -> None:
-        self.isolation_level = isolation_level
+        return self.get_project_root() / self._template_name
 
     def get_api_isolation_level(self) -> IsolationLevel:
-        return self.isolation_level
+        return self._isolation_level
+
+    def set_api_isolation_level(self, isolation_level: IsolationLevel) -> None:
+        self._isolation_level = isolation_level
+
+    def get_localstack_runs_build(self) -> bool:
+        return self._localstack_runs_build
+
+    def set_localstack_runs_build(self, localstack_runs_build: bool) -> None:
+        self._localstack_runs_build = localstack_runs_build
+
+    def get_localstack_feature_set(self) -> LocalStackFeautureSet:
+        return self._localstack_feature_set
+
+    def set_localstack_feature_set(self, localstack_feature_set: LocalStackFeautureSet) -> None:
+        self._localstack_feature_set = localstack_feature_set
 
 
 @pytest.fixture(scope="session", autouse=True)

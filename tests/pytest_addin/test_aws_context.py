@@ -34,7 +34,9 @@ class TestAWSContext:
 
     def test_aws_context(self, aws_context: AWSTestContext):
         project_root = aws_context.get_project_root()
+        template_name = aws_context.get_template_name()
         assert project_root is not None
+        assert template_name is not None
         assert project_root.exists()
         # check that the template.custom.yaml exists
-        assert (aws_context.project_root / aws_context.template_name).exists()
+        assert (project_root / template_name).exists()

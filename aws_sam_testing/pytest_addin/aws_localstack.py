@@ -63,12 +63,17 @@ def aws_localstack(
         template_path=aws_sam_build_template,
     )
 
-    localstack_build_dir_path = toolkit.build()
-    localstack_template_path = localstack_build_dir_path / "template.yaml"
+    if aws_context.get_localstack_runs_build():
+        build_dir = toolkit.build(
+            build_dir=aws_context.get_build_dir(),
+            feature_set=aws_context.get_localstack_feature_set(),
+        )
+    else:
+        build_dir = aws_context.get_build_dir()
 
     with toolkit.run_localstack(
-        build_dir=localstack_build_dir_path,
-        template_path=localstack_template_path,
+        build_dir=build_dir,
+        template_path=aws_sam_build_template,
         pytest_request_context=request,
     ) as localstack:
         yield localstack
