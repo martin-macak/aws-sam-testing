@@ -1,10 +1,29 @@
+import logging
+import sys
+
 import pytest
 
 
 class TestLocalstackSimpleApi:
     @pytest.fixture(scope="session", autouse=True)
     def setup_session(self):
-        pass
+        # Configure the localstack logger to output to stdout in debug mode
+        localstack_logger = logging.getLogger("aws_sam_testing.localstack_logger")
+        localstack_logger.setLevel(logging.DEBUG)
+
+        # Create a handler for stdout
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setLevel(logging.WARNING)
+
+        # Create a standard formatter
+        formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+        handler.setFormatter(formatter)
+
+        # Add the handler to the logger
+        localstack_logger.addHandler(handler)
+
+        # Prevent propagation to avoid duplicate logs
+        localstack_logger.propagate = False
 
     @pytest.fixture(scope="function", autouse=True)
     def setup_test(self):

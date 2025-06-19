@@ -624,43 +624,43 @@ def lambda_handler(event, context):
         def test_resolve_layer_arn_with_string(self, toolkit):
             """Test resolving layer ARN from string."""
             arn = "arn:aws:lambda:us-east-1:123456789012:layer:my-layer:1"
-            result = toolkit._resolve_layer_arn(arn, {}, region="us-east-1")
+            result = toolkit._resolve_layer_arn(arn, region="us-east-1")
             assert result == arn
 
         def test_resolve_layer_arn_with_ref(self, toolkit):
             """Test resolving layer ARN from Ref."""
             layer_ref = {"Ref": "MyLayer"}
-            result = toolkit._resolve_layer_arn(layer_ref, {}, region="us-east-1")
+            result = toolkit._resolve_layer_arn(layer_ref, region="us-east-1")
             assert result == "!Ref:MyLayer"
 
         def test_resolve_layer_arn_with_getatt(self, toolkit):
             """Test resolving layer ARN from GetAtt returns None."""
             layer_ref = {"Fn::GetAtt": ["MyLayer", "Arn"]}
-            result = toolkit._resolve_layer_arn(layer_ref, {}, region="us-east-1")
+            result = toolkit._resolve_layer_arn(layer_ref, region="us-east-1")
             assert result is None
 
         def test_resolve_layer_arn_with_fn_sub_string(self, toolkit):
             """Test resolving layer ARN from Fn::Sub with string format."""
             layer_ref = {"Fn::Sub": "arn:aws:lambda:${AWS::Region}:123456789012:layer:my-layer:1"}
-            result = toolkit._resolve_layer_arn(layer_ref, {}, region="eu-west-1")
+            result = toolkit._resolve_layer_arn(layer_ref, region="eu-west-1")
             assert result == "arn:aws:lambda:eu-west-1:123456789012:layer:my-layer:1"
 
         def test_resolve_layer_arn_with_fn_sub_list_format(self, toolkit):
             """Test resolving layer ARN from Fn::Sub with list format."""
             layer_ref = {"Fn::Sub": ["arn:aws:lambda:${AWS::Region}:123456789012:layer:my-layer:1", {}]}
-            result = toolkit._resolve_layer_arn(layer_ref, {}, region="ap-southeast-2")
+            result = toolkit._resolve_layer_arn(layer_ref, region="ap-southeast-2")
             assert result == "arn:aws:lambda:ap-southeast-2:123456789012:layer:my-layer:1"
 
         def test_resolve_layer_arn_with_fn_sub_default_region(self, toolkit):
             """Test resolving layer ARN from Fn::Sub with default region when none provided."""
             layer_ref = {"Fn::Sub": "arn:aws:lambda:${AWS::Region}:123456789012:layer:my-layer:1"}
-            result = toolkit._resolve_layer_arn(layer_ref, {}, region=None)
+            result = toolkit._resolve_layer_arn(layer_ref, region=None)
             assert result == "arn:aws:lambda:us-east-1:123456789012:layer:my-layer:1"
 
         def test_resolve_layer_arn_with_fn_sub_invalid_format(self, toolkit):
             """Test resolving layer ARN from Fn::Sub with invalid format returns None."""
             layer_ref = {"Fn::Sub": {"invalid": "format"}}
-            result = toolkit._resolve_layer_arn(layer_ref, {}, region="us-east-1")
+            result = toolkit._resolve_layer_arn(layer_ref, region="us-east-1")
             assert result is None
 
         def test_substitute_cloudformation_variables_with_region(self, toolkit):

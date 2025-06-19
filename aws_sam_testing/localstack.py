@@ -1,5 +1,7 @@
 import functools
 import logging
+import re
+import threading
 from contextlib import contextmanager
 from enum import Enum
 from pathlib import Path
@@ -11,6 +13,8 @@ from aws_sam_testing.cfn import CloudFormationTemplateProcessor
 from aws_sam_testing.core import CloudFormationTool
 
 logger = logging.getLogger(__name__)
+
+localstack_logger = logging.getLogger("aws_sam_testing.localstack_logger")
 
 
 class LocalStackFeautureSet(Enum):
@@ -45,6 +49,8 @@ class LocalStack:
         self.host: str | None = None
         self.port: int | None = None
         self.container: Container | None = None
+        self._log_thread: threading.Thread | None = None
+        self._stop_logging = threading.Event()
 
     def __enter__(self):
         self.start()
@@ -96,12 +102,105 @@ class LocalStack:
             volumes={"/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"}},
         )
         self.container = container
+        self._start_logging()
         self.wait_for_localstack_to_be_ready()
 
+    def _start_logging(self):
+        container = self.container
+        if container is None:
+            return
+
+        def _log_stream_worker():
+            """Worker thread that streams and processes container logs."""
+            try:
+                # Stream logs from the container
+                log_stream = container.logs(stream=True, follow=True, timestamps=False)
+
+                # Regular expression to parse LocalStack log format
+                # Example: 2025-06-19T05:48:12.906  INFO --- [et.reactor-0] localstack.request.aws     : AWS s3.ListBuckets => 200
+                log_pattern = re.compile(
+                    r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3})\s+"  # timestamp
+                    r"(\w+)\s+"  # log level (INFO, DEBUG, WARNING, ERROR, etc.)
+                    r"---\s+"  # separator
+                    r"\[([^\]]+)\]\s+"  # thread/context in brackets
+                    r"([^\s]+)\s*:\s*"  # logger name
+                    r"(.*)$"  # message
+                )
+
+                for line in log_stream:
+                    # Check if we should stop
+                    if self._stop_logging.is_set():
+                        break
+
+                    try:
+                        # Decode the log line
+                        if isinstance(line, bytes):
+                            line = line.decode("utf-8", errors="replace")
+                        line = line.strip()
+
+                        if not line:
+                            continue
+
+                        # Try to parse the LocalStack log format
+                        match = log_pattern.match(line)
+                        if match:
+                            timestamp, level, thread, logger_name, message = match.groups()
+
+                            # Map LocalStack log levels to Python logging levels
+                            level_mapping = {
+                                "DEBUG": logging.DEBUG,
+                                "INFO": logging.INFO,
+                                "WARN": logging.WARNING,
+                                "WARNING": logging.WARNING,
+                                "ERROR": logging.ERROR,
+                                "CRITICAL": logging.CRITICAL,
+                                "FATAL": logging.CRITICAL,
+                            }
+
+                            log_level = level_mapping.get(level.upper(), logging.INFO)
+
+                            # Log the message with appropriate level
+                            localstack_logger.log(log_level, f"[{thread}] {logger_name}: {message}", extra={"localstack_timestamp": timestamp})
+                        else:
+                            # If the line doesn't match the expected format, log it as-is at INFO level
+                            localstack_logger.info(line)
+
+                    except Exception as e:
+                        # Log any parsing errors but continue processing
+                        logger.error(f"Error parsing LocalStack log line: {e}")
+
+            except Exception as e:
+                # Log any errors in the streaming itself
+                logger.error(f"Error streaming LocalStack logs: {e}")
+            finally:
+                logger.debug("LocalStack log streaming stopped")
+
+        # Start the logging thread
+        self._log_thread = threading.Thread(
+            target=_log_stream_worker,
+            name="localstack-log-stream",
+            daemon=True,  # Daemon thread will automatically stop when main program exits
+        )
+        self._log_thread.start()
+        logger.debug("Started LocalStack log streaming thread")
+
     def _do_stop(self):
+        # Stop the logging thread first
+        if self._log_thread is not None:
+            try:
+                self._stop_logging.set()
+                self._log_thread.join(timeout=5)  # Wait up to 5 seconds for thread to stop
+                self._log_thread = None
+                self._stop_logging.clear()
+            except Exception as e:
+                logger.error(f"Error stopping LocalStack log streaming thread: {e}")
+
         if self.container is not None:
-            self.container.stop()
-            self.container.remove()
+            try:
+                self.container.stop()
+                self.container.remove()
+            except Exception as e:
+                logger.error(f"Error stopping LocalStack container: {e}")
 
     def wait_for_localstack_to_be_ready(self):
         import socket
@@ -437,7 +536,7 @@ class LocalStackToolkit(CloudFormationTool):
 
             # Process layers in order (they are applied in order)
             for layer_ref in layers:
-                layer_arn = self._resolve_layer_arn(layer_ref, template, region)
+                layer_arn = self._resolve_layer_arn(layer_ref, region)
                 if not layer_arn:
                     continue
 
@@ -531,7 +630,7 @@ class LocalStackToolkit(CloudFormationTool):
 
         return result
 
-    def _resolve_layer_arn(self, layer_ref: Any, template: dict, region: str | None = None) -> str | None:
+    def _resolve_layer_arn(self, layer_ref: Any, region: str | None = None) -> str | None:
         """Resolve a layer reference to its ARN or a special reference identifier.
 
         This method handles different types of layer references that can appear in
@@ -546,8 +645,6 @@ class LocalStackToolkit(CloudFormationTool):
             layer_ref: The layer reference from the template. Can be:
                 - str: Direct ARN string
                 - dict: CloudFormation intrinsic function (Ref, GetAtt, Sub, etc.)
-            template: The CloudFormation template dict (currently unused but kept for
-                future extensions)
             region: The AWS region to use for variable substitution in Fn::Sub
 
         Returns:
@@ -559,13 +656,13 @@ class LocalStackToolkit(CloudFormationTool):
                 - For other types: returns None
 
         Examples:
-            >>> toolkit._resolve_layer_arn("arn:aws:lambda:us-east-1:123:layer:my-layer:1", {})
+            >>> toolkit._resolve_layer_arn("arn:aws:lambda:us-east-1:123:layer:my-layer:1")
             'arn:aws:lambda:us-east-1:123:layer:my-layer:1'
 
-            >>> toolkit._resolve_layer_arn({"Ref": "MyLayer"}, {})
+            >>> toolkit._resolve_layer_arn({"Ref": "MyLayer"})
             '!Ref:MyLayer'
 
-            >>> toolkit._resolve_layer_arn({"Fn::Sub": "arn:aws:lambda:${AWS::Region}:123:layer:my-layer:1"}, {}, "eu-west-1")
+            >>> toolkit._resolve_layer_arn({"Fn::Sub": "arn:aws:lambda:${AWS::Region}:123:layer:my-layer:1"}, "eu-west-1")
             'arn:aws:lambda:eu-west-1:123:layer:my-layer:1'
         """
         if isinstance(layer_ref, str):
