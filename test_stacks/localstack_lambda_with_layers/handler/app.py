@@ -6,11 +6,11 @@ import uuid
 from typing import Any, Dict
 
 import boto3
-from aws_lambda_powertools.event_handler import RestAPIResolver
+from aws_lambda_powertools.event_handler import APIGatewayRestResolver
 from aws_lambda_powertools.event_handler.api_gateway import Response
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
-app = RestAPIResolver()
+app = APIGatewayRestResolver()
 dynamodb = boto3.resource("dynamodb")
 
 
