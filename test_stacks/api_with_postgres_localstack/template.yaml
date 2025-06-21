@@ -30,15 +30,79 @@ Resources:
       Tags:
         - Key: Name
           Value: MySubnet
+
+  SubnetDB1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: MyDBSubnet1
+
+  SubnetDB2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: MyDBSubnet2
           
   SecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       VpcId: !Ref Vpc
       GroupDescription: MySecurityGroup
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: 10.0.0.0/16
       Tags:
         - Key: Name
           Value: MySecurityGroup
+
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for Aurora PostgreSQL
+      SubnetIds:
+        - !Ref SubnetDB1
+        - !Ref SubnetDB2
+      Tags:
+        - Key: Name
+          Value: MyDBSubnetGroup
+
+  AuroraDBCluster:
+    Type: AWS::RDS::DBCluster
+    Properties:
+      Engine: aurora-postgresql
+      EngineVersion: "16.1"
+      MasterUsername: postgres
+      MasterUserPassword: mysecretpassword
+      DatabaseName: mydb
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VpcSecurityGroupIds:
+        - !Ref SecurityGroup
+      BackupRetentionPeriod: 1
+      PreferredBackupWindow: "03:00-04:00"
+      PreferredMaintenanceWindow: "sun:04:00-sun:05:00"
+      Tags:
+        - Key: Name
+          Value: MyAuroraCluster
+
+  AuroraDBInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBClusterIdentifier: !Ref AuroraDBCluster
+      DBInstanceClass: db.t3.medium
+      Engine: aurora-postgresql
+      Tags:
+        - Key: Name
+          Value: MyAuroraInstance
   
 
   MyApi:
@@ -55,6 +119,18 @@ Resources:
     Properties:
       CodeUri: api_handler/
       Handler: app.lambda_handler
+      Environment:
+        Variables:
+          DB_HOST: !GetAtt AuroraDBCluster.Endpoint.Address
+          DB_PORT: !GetAtt AuroraDBCluster.Endpoint.Port
+          DB_NAME: mydb
+          DB_USER: postgres
+          DB_PASSWORD: mysecretpassword
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref SecurityGroup
+        SubnetIds:
+          - !Ref Subnet
       Events:
         ListUsers:
           Type: Api
