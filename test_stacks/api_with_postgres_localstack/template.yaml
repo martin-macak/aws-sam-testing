@@ -1,0 +1,70 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Simple API SAM Template
+  
+Globals:
+  Function:
+    Timeout: 3
+    MemorySize: 128
+    Runtime: python3.12
+    Architectures:
+      - arm64
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: MyVpc
+
+  Subnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.0.0.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: MySubnet
+          
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref Vpc
+      GroupDescription: MySecurityGroup
+      Tags:
+        - Key: Name
+          Value: MySecurityGroup
+  
+
+  MyApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: Prod
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowOrigin: "'*'"
+
+  ApiHandler:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: api_handler/
+      Handler: app.lambda_handler
+      Events:
+        ListUsers:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MyApi
+            Path: /list-users
+            Method: get
+        CreateUser:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MyApi
+            Path: /create-user
+            Method: post
