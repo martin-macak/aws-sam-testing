@@ -593,6 +593,7 @@ class AWSSAMToolkit(CloudFormationTool):
                             aws_region=os.environ.get("AWS_REGION", "us-east-1"),
                             aws_profile=os.environ.get("AWS_PROFILE"),
                             warm_container_initialization_mode="EAGER",
+                            parameter_overrides=parameters or {},
                         )
 
                         # Run the API locally.
@@ -601,7 +602,7 @@ class AWSSAMToolkit(CloudFormationTool):
                             toolkit=self,
                             api_logical_id=api_logical_id,
                             api_data=api_data,
-                            parameters=parameters,
+                            parameters=parameters or {},
                             isolation_level=isolation_level,
                             port=port,
                             host=host,

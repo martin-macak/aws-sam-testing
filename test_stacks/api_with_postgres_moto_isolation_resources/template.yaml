@@ -7,9 +7,11 @@ Globals:
     Timeout: 3
     MemorySize: 128
     Runtime: python3.12
+    Architectures:
+      - arm64
 
 Parameters:
-  DatabaseConnectionString:
+  DbConnectionString:
     Type: String
     Description: The connection string for the database.
   SubnetIds:
@@ -39,7 +41,7 @@ Resources:
       Handler: app.lambda_handler
       Environment:
         Variables:
-          DB_CONNECTION_STRING: !Ref DatabaseConnectionString
+          DB_CONNECTION_STRING: !Ref DbConnectionString
       VpcConfig:
         SecurityGroupIds:
           - !Ref LambdaSecurityGroupId

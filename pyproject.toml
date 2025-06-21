@@ -12,7 +12,6 @@ dependencies = [
     "aws-sam-cli>=1.139.0",
     "aws-sam-translator>=1.97.0",
     "flask-cors>=6.0.1",
-    "psycopg2-binary>=2.9.9",
 ]
 classifiers = [
     "Framework :: Pytest",
@@ -24,6 +23,7 @@ aws_lambda_context = "aws_sam_testing.pytest_addin.aws_lambda_context"
 aws_resources = "aws_sam_testing.pytest_addin.aws_resources"
 aws_sam = "aws_sam_testing.pytest_addin.aws_sam"
 aws_localstack = "aws_sam_testing.pytest_addin.aws_localstack"
+database = "aws_sam_testing.pytest_addin.database"
 
 [tool.hatch.version]
 source = "uv-dynamic-versioning"
@@ -77,5 +77,5 @@ dev = [
     "types-boto3>=1.38.38",
     "aws-lambda-powertools>=3.14.0",
     "aws-xray-sdk>=2.14.0",
-    "psycopg-binary>=3.2.9",
+    "psycopg2-binary>=2.9.9"
 ]
