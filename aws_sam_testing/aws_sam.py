@@ -504,7 +504,7 @@ class AWSSAMToolkit(CloudFormationTool):
             resource_map = ResourceMap(
                 stack_id="test-stack",
                 stack_name="test-stack",
-                parameters={},
+                parameters=parameters or {},
                 tags={},
                 region_name=os.environ.get("AWS_REGION", "us-east-1"),
                 account_id="123456789012",
