@@ -80,6 +80,15 @@ class LocalStack:
         self.stop()
         self.start()
 
+    @contextmanager
+    def environment(self):
+        from aws_sam_testing.util import set_environment
+
+        with set_environment(
+            AWS_ENDPOINT_URL=f"http://{self.host}:{self.port}",
+        ):
+            yield
+
     def _do_start(self):
         from docker import DockerClient
 
@@ -160,7 +169,11 @@ class LocalStack:
                             log_level = level_mapping.get(level.upper(), logging.INFO)
 
                             # Log the message with appropriate level
-                            localstack_logger.log(log_level, f"[{thread}] {logger_name}: {message}", extra={"localstack_timestamp": timestamp})
+                            localstack_logger.log(
+                                log_level,
+                                f"[{thread}] {logger_name}: {message}",
+                                extra={"localstack_timestamp": timestamp},
+                            )
                         else:
                             # If the line doesn't match the expected format, log it as-is at INFO level
                             localstack_logger.info(line)

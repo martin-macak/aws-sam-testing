@@ -1,44 +1,70 @@
 import json
 import os
+from typing import Any, Dict
 
 import psycopg2
+from aws_lambda_powertools.event_handler import APIGatewayRestResolver
+from aws_lambda_powertools.event_handler.api_gateway import Response
+from aws_lambda_powertools.utilities.typing import LambdaContext
 
-connection_string = os.environ["DB_CONNECTION_STRING"]
-conn = psycopg2.connect(connection_string)
+from .database import migrate_database
 
-# The database was created with the following commands:
-# CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, name VARCHAR(255))
-# CREATE SCHEMA IF NOT EXISTS app
+# Initialize API Gateway resolver
+app = APIGatewayRestResolver()
+
+# Get database connection parameters from environment variables
+db_host = os.environ["DB_HOST"]
+db_port = os.environ["DB_PORT"]
+db_name = os.environ["DB_NAME"]
+db_user = os.environ["DB_USER"]
+db_password = os.environ["DB_PASSWORD"]
+
+# Connect using direct keyword arguments
+conn = psycopg2.connect(host=db_host, port=db_port, database=db_name, user=db_user, password=db_password)
+
+migrate_database(conn)
 
 
-def lambda_handler(event, context):
-    path = event.get("path", "")
-    http_method = event.get("httpMethod", "")
-
+@app.get("/list-users")
+def list_users() -> Response:
     try:
-        if path == "/list-users" and http_method == "GET":
-            with conn.cursor() as cursor:
-                cursor.execute("SET search_path TO app")
-                cursor.execute("SELECT id, name FROM users")
-                users = cursor.fetchall()
-                users_list = [{"id": user[0], "name": user[1]} for user in users]
-                return {"statusCode": 200, "headers": {"Content-Type": "application/json"}, "body": json.dumps(users_list)}
-        elif path == "/create-user" and http_method == "POST":
-            try:
-                body = json.loads(event.get("body", "{}"))
-                name = body.get("name")
-                if not name:
-                    return {"statusCode": 400, "headers": {"Content-Type": "application/json"}, "body": json.dumps({"error": "Name is required"})}
-
-                with conn.cursor() as cursor:
-                    cursor.execute("SET search_path TO app")
-                    cursor.execute("INSERT INTO users (name) VALUES (%s) RETURNING id", (name,))
-                    user_id = cursor.fetchone()[0]
-                    conn.commit()
-                    return {"statusCode": 201, "headers": {"Content-Type": "application/json"}, "body": json.dumps({"id": user_id, "name": name})}
-            except json.JSONDecodeError:
-                return {"statusCode": 400, "headers": {"Content-Type": "application/json"}, "body": json.dumps({"error": "Invalid JSON"})}
-        else:
-            return {"statusCode": 404, "headers": {"Content-Type": "application/json"}, "body": json.dumps({"error": "Not found"})}
+        with conn.cursor() as cursor:
+            cursor.execute("SET search_path TO app")
+            cursor.execute("SELECT id, name FROM users")
+            users = cursor.fetchall()
+            users_list = [{"id": user[0], "name": user[1]} for user in users]
+            return Response(status_code=200, body=json.dumps(users_list), headers={"Content-Type": "application/json"})
     except Exception as e:
-        return {"statusCode": 500, "headers": {"Content-Type": "application/json"}, "body": json.dumps({"error": str(e)})}
+        return Response(status_code=500, body=json.dumps({"error": str(e)}), headers={"Content-Type": "application/json"})
+
+
+@app.post("/create-user")
+def create_user() -> Response:
+    try:
+        body: Dict[str, Any] = app.current_event.json_body
+
+        if not body:
+            return Response(status_code=400, body=json.dumps({"error": "Request body is required"}), headers={"Content-Type": "application/json"})
+
+        name = body.get("name")
+        if not name:
+            return Response(status_code=400, body=json.dumps({"error": "Name is required"}), headers={"Content-Type": "application/json"})
+
+        with conn.cursor() as cursor:
+            cursor.execute("SET search_path TO app")
+            cursor.execute("INSERT INTO users (name) VALUES (%s) RETURNING id", (name,))
+            user_id = cursor.fetchone()[0]
+            conn.commit()
+            return Response(status_code=201, body=json.dumps({"id": user_id, "name": name}), headers={"Content-Type": "application/json"})
+    except json.JSONDecodeError:
+        return Response(status_code=400, body=json.dumps({"error": "Invalid JSON in request body"}), headers={"Content-Type": "application/json"})
+    except Exception as e:
+        return Response(status_code=500, body=json.dumps({"error": str(e)}), headers={"Content-Type": "application/json"})
+
+
+def lambda_handler(event: Dict[str, Any], context: LambdaContext) -> Dict[str, Any]:
+    if event.get("command") == "migrate":
+        migrate_database(conn)
+        return {"message": "Database migrated"}
+
+    return app.resolve(event, context)
