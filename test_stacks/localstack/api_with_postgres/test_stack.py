@@ -37,15 +37,22 @@ class TestSimpleApiMotoIsolationResources:
         with open(Path(__file__).parent / "api_handler" / "requirements.txt", "w") as f:
             f.write(f"psycopg2-binary>={psycopg2_version}")
 
+        with open(Path(__file__).parent / "migration" / "requirements.txt", "w") as f:
+            f.write(f"psycopg2-binary>={psycopg2_version}")
+
     @pytest.fixture(scope="session")
     def stack(
         self,
         request: pytest.FixtureRequest,
     ) -> LocalStack:
+        import json
         import shutil
         from pathlib import Path
 
+        import boto3
+
         from aws_sam_testing.aws_sam import AWSSAMToolkit
+        from aws_sam_testing.database import PostgresDatabase
         from aws_sam_testing.localstack import LocalStackFeautureSet, LocalStackToolkit
 
         working_dir = Path(__file__).parent
@@ -72,11 +79,43 @@ class TestSimpleApiMotoIsolationResources:
         )
         assert localstack_processed_build_path.exists()
 
-        with localstack_toolkit.run_localstack(
-            build_dir=localstack_processed_build_path,
-            template_path=localstack_processed_build_path / "template.yaml",
-            pytest_request_context=request,
-        ) as localstack:
+        with PostgresDatabase() as postgres_database:
+
+            def finalize_db():
+                postgres_database.stop()
+
+            request.addfinalizer(finalize_db)
+
+            postgres_database.wait_for_start()
+            postgres_database.create_database("test_db")
+            connection_string = postgres_database.get_connection_string("test_db")
+            connection_string = connection_string.replace("localhost", "host.docker.internal")
+
+            with localstack_toolkit.run_localstack(
+                build_dir=localstack_processed_build_path,
+                template_path=localstack_processed_build_path / "template.yaml",
+                pytest_request_context=request,
+                parameters={
+                    "DatabaseConnectionString": connection_string,
+                },
+            ) as localstack:
+                with localstack.environment():
+                    lambda_ = boto3.client("lambda")
+                    invoke_response = lambda_.invoke(
+                        FunctionName="Migration",
+                        Payload=json.dumps({"RequestType": "Migrate"}),
+                    )
+                    assert invoke_response["StatusCode"] == 200, invoke_response
+                    if invoke_response.get("FunctionError"):
+                        invoke_response_payload = invoke_response["Payload"].read()
+                        print(invoke_response_payload)
+                        assert False, "Migration failed"
+
+                    assert invoke_response.get("FunctionError") is None, invoke_response
+                    invoke_response_payload = invoke_response["Payload"].read()
+                    invoke_response_data = json.loads(invoke_response_payload)
+                    assert invoke_response_data["Message"] == "Database migration completed successfully"
+
             return localstack
 
     def test_run_local_api_with_moto_isolation_resources(

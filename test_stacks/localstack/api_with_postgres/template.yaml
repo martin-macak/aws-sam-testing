@@ -1,6 +1,14 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: Simple API SAM Template
+
+Parameters:
+  DatabaseConnectionString:
+    Type: String
+    Default: ""
+
+Conditions:
+  IsDatabaseConnectionStringProvided: !Not [!Equals [!Ref DatabaseConnectionString, ""]]
   
 Globals:
   Function:
@@ -121,11 +129,11 @@ Resources:
       Handler: app.lambda_handler
       Environment:
         Variables:
-          DB_HOST: !GetAtt AuroraDBCluster.Endpoint.Address
-          DB_PORT: !GetAtt AuroraDBCluster.Endpoint.Port
-          DB_NAME: mydb
-          DB_USER: postgres
-          DB_PASSWORD: mysecretpassword
+          DB_CONNECTION_STRING: !If [
+            IsDatabaseConnectionStringProvided, 
+            !Ref DatabaseConnectionString, 
+            !Sub "postgresql://postgres:mysecretpassword@${AuroraDBCluster.Endpoint.Address}:${AuroraDBCluster.Endpoint.Port}/mydb"
+          ]
       VpcConfig:
         SecurityGroupIds:
           - !Ref SecurityGroup
@@ -144,3 +152,32 @@ Resources:
             RestApiId: !Ref MyApi
             Path: /create-user
             Method: post
+
+  MigrationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: migration/
+      Handler: migration.lambda_handler
+      FunctionName: Migration
+      Environment:
+        Variables:
+          DB_CONNECTION_STRING: !If [
+            IsDatabaseConnectionStringProvided, 
+            !Ref DatabaseConnectionString, 
+            !Sub "postgresql://postgres:mysecretpassword@${AuroraDBCluster.Endpoint.Address}:${AuroraDBCluster.Endpoint.Port}/mydb"
+          ]
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref SecurityGroup
+        SubnetIds:
+          - !Ref Subnet
+      Policies:
+        - AWSLambdaVPCAccessExecutionRole
+
+  DatabaseMigration:
+    Type: Custom::DatabaseMigration
+    DependsOn: 
+      - AuroraDBInstance
+    Properties:
+      ServiceToken: !GetAtt MigrationFunction.Arn
+      DatabaseEndpoint: !GetAtt AuroraDBCluster.Endpoint.Address

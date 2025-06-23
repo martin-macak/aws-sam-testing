@@ -382,6 +382,7 @@ class LocalStackToolkit(CloudFormationTool):
         template_path: Path | None,
         region: str | None = None,
         pytest_request_context: pytest.FixtureRequest | None = None,
+        parameters: dict[str, str] = {},
     ) -> Generator[LocalStack, None, None]:
         import os
 
@@ -417,6 +418,7 @@ class LocalStackToolkit(CloudFormationTool):
                     build_dir=build_dir,
                     template_path=template_path,
                     region=localstack.region,
+                    parameter_overrides=parameters or {},
                 )
 
             yield localstack
