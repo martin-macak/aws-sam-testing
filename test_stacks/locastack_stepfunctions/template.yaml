@@ -1,0 +1,75 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'Step Functions state machine with DynamoDB and SQS integration using JSONata'
+
+Resources:
+  # DynamoDB table for users
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'users'
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  # SQS Queue
+  UserNotificationQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub 'user-notifications'
+      VisibilityTimeout: 300
+      MessageRetentionPeriod: 600
+
+  # IAM Role for Step Functions
+  StatesExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaRole
+      Policies:
+        - PolicyName: StatesExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                Resource: !GetAtt UsersTable.Arn
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                Resource: !GetAtt UserNotificationQueue.Arn
+
+  # Step Functions State Machine
+  UserProcessingStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Type: STANDARD
+      Name: !Sub 'user-processing'
+      DefinitionUri: statemachine/user_processing.asl.json
+      DefinitionSubstitutions:
+        UsersTableName: !Ref UsersTable
+        QueueUrl: !Ref UserNotificationQueue
+      Role: !GetAtt StatesExecutionRole.Arn
+
+Outputs:
+  StateMachineArn:
+    Description: ARN of the User Processing State Machine
+    Value: !Ref UserProcessingStateMachine
+  UsersTableName:
+    Description: Name of the DynamoDB Users table
+    Value: !Ref UsersTable
+  QueueUrl:
+    Description: URL of the SQS Queue
+    Value: !Ref UserNotificationQueue

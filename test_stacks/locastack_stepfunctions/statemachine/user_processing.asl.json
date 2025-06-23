@@ -1,0 +1,50 @@
+{
+    "Comment": "A state machine that processes user data with DynamoDB and SQS",
+    "StartAt": "ProcessUserData",
+    "States": {
+        "ProcessUserData": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:putItem",
+            "Parameters": {
+                "TableName": "${UsersTableName}",
+                "Item": {
+                    "userId": {
+                        "S.$": "$.userId"
+                    },
+                    "username": {
+                        "S.$": "$.username"
+                    },
+                    "email": {
+                        "S.$": "$.email"
+                    },
+                    "createdAt": {
+                        "S.$": "$$.State.EnteredTime"
+                    }
+                }
+            },
+            "ResultPath": "$.dynamoResult",
+            "Next": "PrepareNotification"
+        },
+        "PrepareNotification": {
+            "Type": "Pass",
+            "Parameters": {
+                "message": "Welcome",
+                "userId.$": "$.userId",
+                "email.$": "$.email",
+                "timestamp.$": "$$.State.EnteredTime"
+            },
+            "ResultPath": "$.notification",
+            "Next": "SendNotification"
+        },
+        "SendNotification": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::sqs:sendMessage",
+            "Parameters": {
+                "QueueUrl": "${QueueUrl}",
+                "MessageBody.$": "$.notification"
+            },
+            "ResultPath": "$.sqsResult",
+            "End": true
+        }
+    }
+}
