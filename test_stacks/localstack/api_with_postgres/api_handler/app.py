@@ -17,7 +17,7 @@ db_connection_string = os.environ["DB_CONNECTION_STRING"]
 conn = psycopg2.connect(db_connection_string)
 
 
-@app.get("/list-users")
+@app.get("/users")
 def list_users() -> Response:
     try:
         with conn.cursor() as cursor:
@@ -38,7 +38,7 @@ def list_users() -> Response:
         )
 
 
-@app.post("/create-user")
+@app.post("/users")
 def create_user() -> Response:
     try:
         body: Dict[str, Any] = app.current_event.json_body
